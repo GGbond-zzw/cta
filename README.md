@@ -15,7 +15,8 @@ Ricequant 负责行情与合约数据，以及正式回测中的订单、撮合�
 - Phase 1 已完成：六个最小 RQData 查询接口、标准 DataFrame schema 和本地 Parquet cache 已验证。
 - Phase 2 已完成：point-in-time research universe、真实合约/curve snapshot、官方 dominant/roll map，以及 Signal/Trade/Curve Contract 角色已明确。
 - Phase 3 已完成：统一 factor table，以及可人工复算的 60 日 Trend 和真实 near/main 合约 Carry baseline 已验证。
-- 当前代码产生的是研究信号，不是投资组合权重、目标手数、成交、P&L 或投资建议；这些属于后续阶段。
+- Phase 4 已完成：显式 execution lag 的 Fast Research Backtest、基础 diagnostics、year/instrument breakdown、薄 parameter surface 和本地可复现摘要已验证。
+- 当前结果是 signal-level research return，不是投资组合权重、目标手数、成交、现金 P&L、正式 NAV 或投资建议；这些属于后续阶段。
 - `data/` 中的旧快照和本地 RQAlpha 结果仅作为本机验证资料保留，已整体排除在 Git 之外，不再是新架构的依赖。
 
 当前最小目录：
@@ -30,7 +31,8 @@ china_cta/
     schema.py       # 统一 factor table 与极简 signal scaling
     trend.py        # 60 交易期连续价 Trend baseline
     carry.py        # 真实 near/main 合约 Carry baseline
-  research/         # 快速研究回测（后续阶段）
+  research/
+    fast_backtest.py  # 向量化 signal/forward-return 对齐与研究诊断
   portfolio/        # 组合、风险与目标仓位（后续阶段）
   formal_backtest/  # RQAlpha Plus 对接（后续阶段）
   validation/       # 对账、归因和稳健性（后续阶段）
@@ -145,6 +147,64 @@ raw_factor = (near_settlement / main_settlement - 1)
 
 两个 baseline 的 metadata 都明确：`information_date=trading_date`、`signal_available_at=after_close_of_trading_date`、`earliest_trade_at=next_trading_session`。即 `close(t)` 或 `settlement(t)` 产生的信号不能假设在同一个收盘价成交。Phase 3 不模拟交易，也不把 signal 转换为 position。
 
+## Phase 4 Fast Research Backtest
+
+`china_cta.research.fast_backtest` 直接接受 Phase 3 五列 factor table、Phase 2 的 ratio-adjusted research continuous price 和同日期 PIT universe。Trend 与 Carry 使用同一个函数，不需要在 backtest 中加入 factor-specific 分支。
+
+### 时间对齐与 Research Return
+
+`execution_lag` 是必填正整数，不存在隐藏默认值。v1 固定一段连续价收益期：
+
+```text
+signal_date = t（收盘后信号才可用）
+execution_lag = 1
+return_start = t 后第 1 个连续价观测日
+return_end = return_start 后第 1 个连续价观测日
+realization_date = return_end
+
+research_forward_return = close(return_end) / close(return_start) - 1
+research_exposure = signal
+gross_signal_return = research_exposure * research_forward_return
+```
+
+因此 lag=1 不会把 signal(t) 乘到 `close(t-1) → close(t)` 或假设在 `close(t)` 成交。连续价必须带有 `usage=signal_research_only`、`cash_pnl_allowed=False`、`adjust_type=pre`、`adjust_method=prev_close_ratio`；结果继续标记 `research_only=True`，不得解释为真实合约现金 P&L。缺失 signal、price 或未来 return 不填充，保留 `NA`。
+
+明细输出：
+
+```text
+signal_date, instrument, factor_name, raw_factor, signal,
+execution_lag, return_start, return_end, realization_date,
+research_exposure, research_forward_return, gross_signal_return,
+turnover_proxy, cost_rate, rough_cost, net_signal_return
+```
+
+### Turnover、Cost 与 Metrics
+
+Research turnover proxy 定义为同品种相邻研究 exposure 的绝对变化，首次 exposure 从 0 开始：
+
+```text
+turnover_proxy = abs(exposure_t - exposure_t_minus_1)
+rough_cost = turnover_proxy * cost_rate
+```
+
+`cost_rate` 默认为 0，可显式设置；它只是 sensitivity assumption，不代表交易所/券商手续费、平今规则或 market impact。
+
+缺失 signal 当期保持 `NA`，不产生 exposure、return 或 turnover；下一次重新出现可用 signal 时，turnover proxy 按从 0 重新建立 research exposure 计算，不前向延续旧 signal。
+
+Overall 诊断先按 `realization_date` 对当日可用品种 signal return 做简单均值，再输出累计 gross/net signal return、年化均值、年化波动、Sharpe 和最大回撤；同时保留平均 turnover proxy、rough cost，以及适用时的 cross-sectional IC、Rank IC、long-short return。该简单均值只是 Alpha 诊断聚合，不是 Phase 5 Portfolio Construction。Breakdown 使用 realization year 和 instrument。当前稳定数据契约没有可靠 PIT sector metadata，因此 sector breakdown 明确 deferred。
+
+### Parameter Surface 与本地结果
+
+`run_parameter_surface` 只遍历研究员显式给出的参数集合及 factor-builder，例如 `lookback=[40, 60, 80]`；返回 overall/year/instrument 三张比较表，不排序、不选优、不自动扩张 grid。
+
+`save_research_run` 在 `results/<run_name>/` 保存：
+
+- `config.json`：factor、normalization、PIT universe、execution lag、return definition、日期、cost、parameter grid 和输入指纹。
+- `overall.csv`、`by_year.csv`、`by_instrument.csv`。
+- 参数测试存在时，额外保存三张 `parameter_surface_*.csv`。
+
+`results/` 整体被 Git ignore；不保存大明细、不使用数据库，也不记录机器当前时间。相同输入与相同配置会产生相同 DataFrame 和输入指纹。RQFactor adapter 当前 deferred：基础 IC/Rank IC 已能透明计算，引入可选依赖不会改善 Fast Research 核心正确性。
+
 ## 环境
 
 项目解释器固定为：
@@ -203,10 +263,17 @@ $env:RUN_RQDATA_INTEGRATION = "1"
 & "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_factors_integration.py -q
 ```
 
+Phase 4 的 execution lag、RB/CU/IF Trend、RB/CU Carry、连续价 PIT reconciliation 和 40/60/80 parameter surface 验收：
+
+```powershell
+$env:RUN_RQDATA_INTEGRATION = "1"
+& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_fast_backtest_integration.py -q
+```
+
 `check_rqdata.py` 会读取最近一个已完成交易日的 RB 主力合约日线。`smoke_rqalpha_futures.py` 使用本机 `data/rqalpha_bundle_futures_smoke/` 中已验证的期货 bundle，对 `AG1612` 做一手日频正式回测，并检查成交与 NAV 输出。
 
 该本地 bundle 只验证了期货数据；因基础数据更新时 RQData 流量耗尽，里面的股票和指数文件不得用于研究。正式研究开始前，应按实际日期范围准备有效的 RQAlpha Plus 数据。
 
 ## 当前停止边界
 
-Phase 3 到此为止。其他 Alpha、Portfolio、Risk、Position Sizing、Research Backtest 和正式回测 adapter 均未实现，未经明确授权不进入 Phase 4。
+Phase 4 到此为止。Portfolio、Risk、Volatility Targeting、Position Sizing、Target Quantity 和正式回测 adapter 均未实现，未经明确授权不进入 Phase 5。
