@@ -1,0 +1,39 @@
+# Python environments and caches
+.venv/
+.conda/
+.conda-env/
+env/
+conda-meta/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+/.vscode/
+
+# Local market data, RQAlpha bundles/results, and environment backups
+/data/
+/migration_backups/
+*.parquet
+*.feather
+*.arrow
+*.h5
+*.pkl
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+local.yaml
+local.yml
+config/local*.yaml
+config/local*.yml
+config/*.local.yaml
+config/*.local.yml
+config/*.local.json
+config/*.local.toml
+credentials*.yaml
+credentials*.yml
+secrets*.yaml
+secrets*.yml
+.rqdata/
+.rqalpha-plus/
