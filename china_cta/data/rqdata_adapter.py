@@ -99,7 +99,7 @@ class RQDataConfig:
 
 
 class RQDataAdapter:
-    """Expose only the six RQData queries required by Phase 1."""
+    """Expose the small set of RQData queries required by the current phases."""
 
     def __init__(self, config: RQDataConfig | None = None) -> None:
         self.config = config or RQDataConfig.from_environment()
@@ -177,6 +177,46 @@ class RQDataAdapter:
             return self._standardize_instruments(pd.DataFrame(raw))
 
         return self._cached_frame("future_instruments", request_params, fetch)
+
+    def get_future_contracts(
+        self,
+        underlying_symbol: str,
+        date: DateLike,
+    ) -> tuple[str, ...]:
+        """Return RQData's real, tradable contracts for one product and date."""
+
+        symbol = self._normalize_ids(underlying_symbol, "underlying_symbol")[0]
+        request_params = {
+            "underlying_symbol": symbol,
+            "date": date,
+            "market": self.config.market,
+        }
+
+        def fetch() -> pd.DataFrame:
+            self._ensure_initialized()
+            try:
+                result = rqdatac.futures.get_contracts(
+                    symbol,
+                    date=date,
+                    market=self.config.market,
+                )
+            except Exception as exc:
+                raise RQDataAdapterError(
+                    f"RQData future-contracts query failed for {symbol}"
+                ) from exc
+            contracts = self._normalize_ids(
+                () if result is None else result, "future contracts"
+            )
+            frame = pd.DataFrame({"order_book_id": contracts})
+            self._validate_unique(frame, ["order_book_id"], "future contracts")
+            return frame
+
+        frame = self._cached_frame("future_contracts", request_params, fetch)
+        if frame.columns.tolist() != ["order_book_id"]:
+            raise DataValidationError(
+                "Future-contract cache must contain only order_book_id"
+            )
+        return tuple(frame["order_book_id"].astype(str))
 
     def get_instrument_details(
         self,
@@ -398,6 +438,87 @@ class RQDataAdapter:
             ).reset_index(drop=True)
 
         return self._cached_frame("dominant_map", request_params, fetch)
+
+    def get_dominant_price(
+        self,
+        underlying_symbols: str | Sequence[str],
+        start_date: DateLike,
+        end_date: DateLike,
+        *,
+        fields: str | Sequence[str] | None = None,
+        adjust_type: str = "pre",
+        adjust_method: str = "prev_close_spread",
+        rule: int = 0,
+        rank: int = 1,
+    ) -> pd.DataFrame:
+        """Return RQData continuous prices for signal/research use only.
+
+        These adjusted prices must never be used to calculate cash P&L.
+        """
+
+        symbols = self._normalize_ids(underlying_symbols, "underlying_symbols")
+        if adjust_type not in ("none", "pre", "post"):
+            raise ValueError("adjust_type must be 'none', 'pre', or 'post'")
+        if adjust_method not in (
+            "prev_close_spread",
+            "open_spread",
+            "prev_close_ratio",
+            "open_ratio",
+        ):
+            raise ValueError("unsupported RQData dominant-price adjustment method")
+        if rule not in (0, 1, 2, 3):
+            raise ValueError("rule must be one of 0, 1, 2, or 3")
+        if rank not in (1, 2, 3):
+            raise ValueError("rank must be one of 1, 2, or 3")
+
+        requested_fields = self._normalize_fields(
+            DEFAULT_DAILY_FIELDS if fields is None else fields
+        )
+        request_params = {
+            "underlying_symbols": symbols,
+            "start_date": start_date,
+            "end_date": end_date,
+            "frequency": "1d",
+            "fields": requested_fields,
+            "adjust_type": adjust_type,
+            "adjust_method": adjust_method,
+            "rule": rule,
+            "rank": rank,
+        }
+
+        def fetch() -> pd.DataFrame:
+            self._ensure_initialized()
+            query_symbols: str | list[str] = (
+                symbols[0] if len(symbols) == 1 else list(symbols)
+            )
+            try:
+                result = rqdatac.futures.get_dominant_price(
+                    query_symbols,
+                    start_date=start_date,
+                    end_date=end_date,
+                    frequency="1d",
+                    fields=list(requested_fields),
+                    adjust_type=adjust_type,
+                    adjust_method=adjust_method,
+                    rule=rule,
+                    rank=rank,
+                )
+            except Exception as exc:
+                raise RQDataAdapterError(
+                    "RQData dominant-price query failed for " + ", ".join(symbols)
+                ) from exc
+            if result is None or len(result) == 0:
+                raise RQDataAdapterError(
+                    "RQData returned no dominant prices for " + ", ".join(symbols)
+                )
+            raw = result.to_frame() if isinstance(result, pd.Series) else result
+            return self._standardize_dominant_prices(
+                pd.DataFrame(raw),
+                symbols,
+                requested_fields,
+            )
+
+        return self._cached_frame("dominant_price", request_params, fetch)
 
     def get_trading_parameters(
         self,
@@ -656,6 +777,67 @@ class RQDataAdapter:
         return (
             frame.loc[:, ["trading_date", "order_book_id", *remaining]]
             .sort_values(["trading_date", "order_book_id"])
+            .reset_index(drop=True)
+        )
+
+    @staticmethod
+    def _standardize_dominant_prices(
+        raw: pd.DataFrame,
+        requested_symbols: tuple[str, ...],
+        requested_fields: tuple[str, ...],
+    ) -> pd.DataFrame:
+        frame = raw.copy().reset_index()
+        if "underlying_symbol" not in frame.columns:
+            if len(requested_symbols) != 1:
+                raise DataValidationError(
+                    "Dominant prices lost underlying_symbol for multiple products"
+                )
+            frame.insert(0, "underlying_symbol", requested_symbols[0])
+
+        if "trading_date" not in frame.columns:
+            date_column = RQDataAdapter._first_column(
+                frame, ("date", "datetime", "index")
+            )
+            if date_column is None:
+                raise DataValidationError("Daily dominant prices have no date")
+            frame = frame.rename(columns={date_column: "trading_date"})
+
+        data_fields = [
+            field
+            for field in requested_fields
+            if field not in ("trading_date", "underlying_symbol")
+        ]
+        missing = [field for field in data_fields if field not in frame.columns]
+        if missing:
+            raise DataValidationError(
+                f"Dominant prices are missing fields: {missing}"
+            )
+
+        frame["underlying_symbol"] = (
+            frame["underlying_symbol"].astype("string").str.strip().str.upper()
+        )
+        frame["trading_date"] = pd.to_datetime(
+            frame["trading_date"], errors="raise"
+        ).dt.normalize()
+        for field in data_fields:
+            if field in NUMERIC_BAR_FIELDS:
+                frame[field] = pd.to_numeric(frame[field], errors="coerce")
+        if "volume" in frame.columns and frame["volume"].dropna().lt(0).any():
+            raise DataValidationError("Dominant prices contain negative volume")
+        if (
+            "open_interest" in frame.columns
+            and frame["open_interest"].dropna().lt(0).any()
+        ):
+            raise DataValidationError(
+                "Dominant prices contain negative open_interest"
+            )
+
+        leading = ["trading_date", "underlying_symbol"]
+        key = ["trading_date", "underlying_symbol"]
+        RQDataAdapter._validate_unique(frame, key, "dominant prices")
+        return (
+            frame.loc[:, [*leading, *data_fields]]
+            .sort_values(key)
             .reset_index(drop=True)
         )
 

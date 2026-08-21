@@ -88,6 +88,26 @@ def test_future_instruments_match_phase1_schema(monkeypatch, tmp_path) -> None:
     assert result["maturity_date"].dtype == "datetime64[ns]"
 
 
+def test_future_contracts_use_rqdata_order_and_cache(monkeypatch, tmp_path) -> None:
+    calls = 0
+    monkeypatch.setattr("rqdatac.initialized", lambda: True)
+
+    def fake_get_contracts(symbol, date, market):
+        nonlocal calls
+        calls += 1
+        assert (symbol, date, market) == ("RB", "2020-06-15", "cn")
+        return ["RB2007", "RB2010", "RB2101"]
+
+    monkeypatch.setattr("rqdatac.futures.get_contracts", fake_get_contracts)
+    adapter = adapter_with_cache(tmp_path)
+
+    first = adapter.get_future_contracts("rb", "2020-06-15")
+    second = adapter.get_future_contracts("rb", "2020-06-15")
+
+    assert calls == 1
+    assert first == second == ("RB2007", "RB2010", "RB2101")
+
+
 def test_instrument_details_calls_tick_size_method(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("rqdatac.initialized", lambda: True)
 
@@ -285,6 +305,55 @@ def test_dominant_map_is_normalized(monkeypatch, tmp_path) -> None:
         "RB2610",
         "IF2610",
         "RB2610",
+    ]
+
+
+def test_dominant_price_is_signal_data_and_hits_cache(monkeypatch, tmp_path) -> None:
+    calls = 0
+    monkeypatch.setattr("rqdatac.initialized", lambda: True)
+    index = pd.MultiIndex.from_tuples(
+        [("RB", pd.Timestamp("2020-06-15"))],
+        names=["underlying_symbol", "date"],
+    )
+    raw = pd.DataFrame(
+        {"close": [3600.0], "volume": [1_000.0]},
+        index=index,
+    )
+
+    def fake_get_dominant_price(symbols, **kwargs):
+        nonlocal calls
+        calls += 1
+        assert symbols == "RB"
+        assert kwargs["adjust_type"] == "pre"
+        assert kwargs["adjust_method"] == "prev_close_spread"
+        assert kwargs["fields"] == ["close", "volume"]
+        return raw
+
+    monkeypatch.setattr(
+        "rqdatac.futures.get_dominant_price", fake_get_dominant_price
+    )
+    adapter = adapter_with_cache(tmp_path)
+
+    first = adapter.get_dominant_price(
+        "rb",
+        "2020-06-15",
+        "2020-06-15",
+        fields=("close", "volume"),
+    )
+    second = adapter.get_dominant_price(
+        "rb",
+        "2020-06-15",
+        "2020-06-15",
+        fields=("close", "volume"),
+    )
+
+    assert calls == 1
+    pd.testing.assert_frame_equal(first, second)
+    assert first.columns.tolist() == [
+        "trading_date",
+        "underlying_symbol",
+        "close",
+        "volume",
     ]
 
 
