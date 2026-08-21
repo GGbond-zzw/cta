@@ -14,7 +14,8 @@ Ricequant 负责行情与合约数据，以及正式回测中的订单、撮合�
 - M1 架构清理已完成：旧的 Contract Master 快照、Contract Selector、Parquet 存储和相关脚本/测试已从源码中移除。
 - Phase 1 已完成：六个最小 RQData 查询接口、标准 DataFrame schema 和本地 Parquet cache 已验证。
 - Phase 2 已完成：point-in-time research universe、真实合约/curve snapshot、官方 dominant/roll map，以及 Signal/Trade/Curve Contract 角色已明确。
-- 当前代码仍不会产生 Trend、Carry、交易信号、目标持仓或投资建议；这些属于后续阶段。
+- Phase 3 已完成：统一 factor table，以及可人工复算的 60 日 Trend 和真实 near/main 合约 Carry baseline 已验证。
+- 当前代码产生的是研究信号，不是投资组合权重、目标手数、成交、P&L 或投资建议；这些属于后续阶段。
 - `data/` 中的旧快照和本地 RQAlpha 结果仅作为本机验证资料保留，已整体排除在 Git 之外，不再是新架构的依赖。
 
 当前最小目录：
@@ -25,7 +26,10 @@ china_cta/
     rqdata_adapter.py  # 当前阶段所需的薄 RQData 查询接口
     cache.py           # 参数哈希 Parquet + JSON metadata
     contracts.py       # Phase 2 合约、universe、curve 与 roll 语义
-  factors/          # Factor / Alpha（后续阶段）
+  factors/
+    schema.py       # 统一 factor table 与极简 signal scaling
+    trend.py        # 60 交易期连续价 Trend baseline
+    carry.py        # 真实 near/main 合约 Carry baseline
   research/         # 快速研究回测（后续阶段）
   portfolio/        # 组合、风险与目标仓位（后续阶段）
   formal_backtest/  # RQAlpha Plus 对接（后续阶段）
@@ -48,10 +52,11 @@ config/
 - `get_dominant_map(symbols, start, end, rule=0, rank=1)`：RQData 主力/次主力实际合约映射。
 - `get_trading_parameters(ids, start, end)`：原样保留保证金、手续费和限仓等供应商字段及单位。
 
-Phase 2 仅增加两个 RQData 已有能力的薄封装：
+Phase 2–3 仅增加三个 RQData 已有能力的薄封装：
 
 - `get_future_contracts(product, date)`：指定历史日期真实、可交易的月份合约，沿用 RQData 到期月排序。
 - `get_dominant_price(...)`：官方主力连续行情；只允许用于 Signal/Research，禁止用于现金 P&L、结算或账户估值。
+- `get_roll_yield(...)`：官方期货展期收益率；Phase 3 只把 `near_main` 结果用作 Carry 验收基准，不替代本项目保留 near/main 合约明细的计算结果。
 
 日线固定以 `trading_date, order_book_id` 开头。分钟线固定同时保留自然时间 `datetime` 和期货交易日 `trading_date`，不会把夜盘自然日期当作交易日。
 
@@ -88,6 +93,57 @@ roll_map:
 ```
 
 `price` 明确来自调用参数指定的 `settlement`（默认）或 `close`；不做价格补齐。日线 price/volume/open_interest 和启用后的流动性 universe 均为收盘后数据，只能用于下一决策时点，不能用于当日盘中决策。品种上市历史来自完整 instrument master 中 `listed_date <= trading_date` 的真实合约，不会把未来上市品种放入历史 universe。`instruments()` 的最新 margin/trading hours 等字段不作为历史动态信息；历史 margin、fee、limit 始终查询 `get_trading_parameters`。
+
+## Phase 3 因子语义
+
+Trend 与 Carry 的内部输入不同，但都输出同一个最小表：
+
+```text
+trading_date, instrument, factor_name, raw_factor, signal
+```
+
+- `trading_date`：产生该研究信号的信息日/决策日；当前两个 baseline 都使用该日收盘后数据。
+- `instrument`：期货品种，例如 `RB`、`CU`、`IF`，不是月份合约。
+- `factor_name`：唯一规格名；当前为 `trend_60d` 或 `carry_near_main`。
+- `raw_factor`：保持可解释定义的原始统计量。
+- `signal`：方向和强度，正值表示 long bias，负值表示 short bias；它不是仓位、手数、风险敞口或预期收益率。
+
+所有 factor table 都先与 Phase 2 的 point-in-time eligible universe 做日期/品种内连接；不为尚未上市或当日不合格品种生成信号，也不为完整 panel 填值。统一的首版映射为：
+
+```text
+signal = clip(raw_factor / 0.20, -1, 1)
+```
+
+`0.20` 是清晰可配置的默认尺度，不是优化结果。它只统一正负方向和大致强度，不改变两个 raw factor 的经济定义。
+
+### Trend baseline
+
+`trend_60d` 使用 RQData 官方主力连续收盘价，固定 `adjust_type="pre"`、`adjust_method="prev_close_ratio"`：
+
+```text
+raw_factor(t) = adjusted_close(t) / adjusted_close(t-60) - 1
+```
+
+这里的 60 是价格序列中的 60 个交易期差，因此需要 61 个完整且为正的观测。窗口不足或窗口内有缺失/非正价格时保留 `NA`，不插值、不前向填充。连续价仅用于 Signal/Research，不能用于现金 P&L、账户估值或真实成交价格；比例复权用于降低主力切换造成的机械价格跳跃。
+
+### Carry baseline
+
+`carry_near_main` 只使用同一历史日期实际存在的真实月份合约及其 `settlement`：
+
+- `far/main`：RQData `rule=0, rank=1` 主力真实合约。
+- `near`：到期日在主力之前、尚未到期的最早真实合约。
+- `maturity_gap_days`：两个实际到期日之间的自然日数。
+
+```text
+raw_factor = (near_settlement / main_settlement - 1)
+             * 365 / maturity_gap_days
+```
+
+正值表示近月相对主力远月更贵，对应 backwardation/long bias。若没有唯一主力、没有合格 near、到期日差异常、价格缺失或价格非正，则保留 `NA`；不外推、不拟合 curve，也不使用连续价格。该定义与 RQData 商品期货 `get_roll_yield(type="near_main", rule=0)` 的年化口径做真实数据交叉验证；股指期货不强行套用此商品 Carry baseline。
+
+### 可用时点
+
+两个 baseline 的 metadata 都明确：`information_date=trading_date`、`signal_available_at=after_close_of_trading_date`、`earliest_trade_at=next_trading_session`。即 `close(t)` 或 `settlement(t)` 产生的信号不能假设在同一个收盘价成交。Phase 3 不模拟交易，也不把 signal 转换为 position。
 
 ## 环境
 
@@ -140,10 +196,17 @@ $env:RUN_RQDATA_INTEGRATION = "1"
 & "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_contracts_integration.py -q
 ```
 
+Phase 3 的 RB/CU/IF 60 日 Trend、RB/CU Carry、手工公式和 RQData 官方 `near_main` 基准验收：
+
+```powershell
+$env:RUN_RQDATA_INTEGRATION = "1"
+& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_factors_integration.py -q
+```
+
 `check_rqdata.py` 会读取最近一个已完成交易日的 RB 主力合约日线。`smoke_rqalpha_futures.py` 使用本机 `data/rqalpha_bundle_futures_smoke/` 中已验证的期货 bundle，对 `AG1612` 做一手日频正式回测，并检查成交与 NAV 输出。
 
 该本地 bundle 只验证了期货数据；因基础数据更新时 RQData 流量耗尽，里面的股票和指数文件不得用于研究。正式研究开始前，应按实际日期范围准备有效的 RQAlpha Plus 数据。
 
 ## 当前停止边界
 
-Phase 2 到此为止。Trend、Carry、其他 Alpha、Portfolio、Risk、Research Backtest 和正式回测 adapter 均未实现，未经明确授权不进入 Phase 3。
+Phase 3 到此为止。其他 Alpha、Portfolio、Risk、Position Sizing、Research Backtest 和正式回测 adapter 均未实现，未经明确授权不进入 Phase 4。

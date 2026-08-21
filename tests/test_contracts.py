@@ -240,10 +240,12 @@ def test_continuous_price_is_marked_signal_only() -> None:
         StubAdapter(), "RB", "2020-06-15", "2020-06-15", fields="close"
     )
 
-    assert result.attrs == {
-        "usage": "signal_research_only",
-        "cash_pnl_allowed": False,
-    }
+    assert result.attrs["usage"] == "signal_research_only"
+    assert result.attrs["cash_pnl_allowed"] is False
+    assert result.attrs["adjust_type"] == "pre"
+    assert result.attrs["adjust_method"] == "prev_close_spread"
+    assert result.attrs["rule"] == 0
+    assert result.attrs["rank"] == 1
 
 
 def test_trading_parameter_availability_blocks_post_close_decisions() -> None:

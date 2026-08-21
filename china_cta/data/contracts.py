@@ -363,6 +363,10 @@ def get_signal_continuous_price(
     ).copy()
     frame.attrs["usage"] = "signal_research_only"
     frame.attrs["cash_pnl_allowed"] = False
+    frame.attrs["adjust_type"] = adjust_type
+    frame.attrs["adjust_method"] = adjust_method
+    frame.attrs["rule"] = 0
+    frame.attrs["rank"] = 1
     return frame
 
 

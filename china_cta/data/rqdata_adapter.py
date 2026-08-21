@@ -520,6 +520,57 @@ class RQDataAdapter:
 
         return self._cached_frame("dominant_price", request_params, fetch)
 
+    def get_roll_yield(
+        self,
+        underlying_symbols: str | Sequence[str],
+        start_date: DateLike,
+        end_date: DateLike,
+        *,
+        roll_type: str = "near_main",
+        rule: int = 0,
+    ) -> pd.DataFrame:
+        """Return RQData's commodity roll yield as a Carry benchmark."""
+
+        symbols = self._normalize_ids(underlying_symbols, "underlying_symbols")
+        if roll_type not in ("main_sub", "near_main"):
+            raise ValueError("roll_type must be 'main_sub' or 'near_main'")
+        if rule not in (0, 1, 2, 3):
+            raise ValueError("rule must be one of 0, 1, 2, or 3")
+        request_params = {
+            "underlying_symbols": symbols,
+            "start_date": start_date,
+            "end_date": end_date,
+            "type": roll_type,
+            "rule": rule,
+            "market": self.config.market,
+        }
+
+        def fetch() -> pd.DataFrame:
+            self._ensure_initialized()
+            query_symbols: str | list[str] = (
+                symbols[0] if len(symbols) == 1 else list(symbols)
+            )
+            try:
+                result = rqdatac.futures.get_roll_yield(
+                    query_symbols,
+                    start_date=start_date,
+                    end_date=end_date,
+                    type=roll_type,
+                    rule=rule,
+                    market=self.config.market,
+                )
+            except Exception as exc:
+                raise RQDataAdapterError(
+                    "RQData roll-yield query failed for " + ", ".join(symbols)
+                ) from exc
+            if result is None or len(result) == 0:
+                raise RQDataAdapterError(
+                    "RQData returned no roll yield for " + ", ".join(symbols)
+                )
+            return self._standardize_roll_yield(pd.DataFrame(result), symbols)
+
+        return self._cached_frame("roll_yield", request_params, fetch)
+
     def get_trading_parameters(
         self,
         order_book_ids: str | Sequence[str],
@@ -838,6 +889,54 @@ class RQDataAdapter:
         return (
             frame.loc[:, [*leading, *data_fields]]
             .sort_values(key)
+            .reset_index(drop=True)
+        )
+
+    @staticmethod
+    def _standardize_roll_yield(
+        raw: pd.DataFrame,
+        requested_symbols: tuple[str, ...],
+    ) -> pd.DataFrame:
+        frame = raw.copy().reset_index()
+        if "underlying_symbol" not in frame.columns:
+            if len(requested_symbols) != 1:
+                raise DataValidationError(
+                    "Roll yield lost underlying_symbol for multiple products"
+                )
+            frame.insert(0, "underlying_symbol", requested_symbols[0])
+        if "trading_date" not in frame.columns:
+            date_column = RQDataAdapter._first_column(frame, ("date", "index"))
+            if date_column is None:
+                raise DataValidationError("Roll yield has no trading date")
+            frame = frame.rename(columns={date_column: "trading_date"})
+
+        value_columns = (
+            "from_contract",
+            "to_contract",
+            "yield",
+            "annualized_yield",
+            "annualized_yield_trading",
+        )
+        missing = [column for column in value_columns if column not in frame.columns]
+        if missing:
+            raise DataValidationError(f"Roll yield is missing fields: {missing}")
+
+        frame["trading_date"] = pd.to_datetime(
+            frame["trading_date"], errors="raise"
+        ).dt.normalize()
+        for column in ("underlying_symbol", "from_contract", "to_contract"):
+            frame[column] = frame[column].astype("string").str.strip().str.upper()
+        for column in value_columns[2:]:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        RQDataAdapter._validate_unique(
+            frame, ["trading_date", "underlying_symbol"], "roll yield"
+        )
+        return (
+            frame.loc[
+                :,
+                ["trading_date", "underlying_symbol", *value_columns],
+            ]
+            .sort_values(["trading_date", "underlying_symbol"])
             .reset_index(drop=True)
         )
 

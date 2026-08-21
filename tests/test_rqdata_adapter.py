@@ -357,6 +357,53 @@ def test_dominant_price_is_signal_data_and_hits_cache(monkeypatch, tmp_path) -> 
     ]
 
 
+def test_roll_yield_is_standardized_and_hits_cache(monkeypatch, tmp_path) -> None:
+    calls = 0
+    monkeypatch.setattr("rqdatac.initialized", lambda: True)
+    index = pd.MultiIndex.from_tuples(
+        [("RB", pd.Timestamp("2020-06-12"))],
+        names=["underlying_symbol", "date"],
+    )
+    raw = pd.DataFrame(
+        {
+            "from_contract": ["RB2006"],
+            "to_contract": ["RB2010"],
+            "yield": [0.01],
+            "annualized_yield": [0.03],
+            "annualized_yield_trading": [0.025],
+        },
+        index=index,
+    )
+
+    def fake_get_roll_yield(symbols, **kwargs):
+        nonlocal calls
+        calls += 1
+        assert symbols == "RB"
+        assert kwargs["type"] == "near_main"
+        assert kwargs["rule"] == 0
+        return raw
+
+    monkeypatch.setattr("rqdatac.futures.get_roll_yield", fake_get_roll_yield)
+    adapter = adapter_with_cache(tmp_path)
+
+    first = adapter.get_roll_yield("rb", "2020-06-12", "2020-06-12")
+    second = adapter.get_roll_yield("rb", "2020-06-12", "2020-06-12")
+
+    assert calls == 1
+    pd.testing.assert_frame_equal(first, second)
+    assert first.columns.tolist() == [
+        "trading_date",
+        "underlying_symbol",
+        "from_contract",
+        "to_contract",
+        "yield",
+        "annualized_yield",
+        "annualized_yield_trading",
+    ]
+    assert first.loc[0, "from_contract"] == "RB2006"
+    assert first.loc[0, "annualized_yield"] == 0.03
+
+
 def test_trading_parameters_preserve_provider_units(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("rqdatac.initialized", lambda: True)
     index = pd.MultiIndex.from_tuples(
