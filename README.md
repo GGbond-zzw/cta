@@ -16,7 +16,8 @@ Ricequant 负责行情与合约数据，以及正式回测中的订单、撮合�
 - Phase 2 已完成：point-in-time research universe、真实合约/curve snapshot、官方 dominant/roll map，以及 Signal/Trade/Curve Contract 角色已明确。
 - Phase 3 已完成：统一 factor table，以及可人工复算的 60 日 Trend 和真实 near/main 合约 Carry baseline 已验证。
 - Phase 4 已完成：显式 execution lag 的 Fast Research Backtest、基础 diagnostics、year/instrument breakdown、薄 parameter surface 和本地可复现摘要已验证。
-- 当前结果是 signal-level research return，不是投资组合权重、目标手数、成交、现金 P&L、正式 NAV 或投资建议；这些属于后续阶段。
+- Phase 5 已完成：滚动波动率、固定策略聚合、透明约束、diagonal risk scale、真实 Trade Contract、整数目标手数、margin sanity 和 capacity diagnostics 已验证。
+- 当前正式输出止于 Target Position；它不是订单、成交、现金 P&L、正式 NAV 或投资建议。正式账户模拟属于 Phase 6 RQAlpha Plus。
 - `data/` 中的旧快照和本地 RQAlpha 结果仅作为本机验证资料保留，已整体排除在 Git 之外，不再是新架构的依赖。
 
 当前最小目录：
@@ -33,7 +34,9 @@ china_cta/
     carry.py        # 真实 near/main 合约 Carry baseline
   research/
     fast_backtest.py  # 向量化 signal/forward-return 对齐与研究诊断
-  portfolio/        # 组合、风险与目标仓位（后续阶段）
+  portfolio/
+    volatility.py   # PIT rolling close-to-close volatility
+    allocation.py   # 约束、diagonal risk、真实合约与整数目标手数
   formal_backtest/  # RQAlpha Plus 对接（后续阶段）
   validation/       # 对账、归因和稳健性（后续阶段）
 scripts/
@@ -205,6 +208,100 @@ Overall 诊断先按 `realization_date` 对当日可用品种 signal return 做�
 
 `results/` 整体被 Git ignore；不保存大明细、不使用数据库，也不记录机器当前时间。相同输入与相同配置会产生相同 DataFrame 和输入指纹。RQFactor adapter 当前 deferred：基础 IC/Rank IC 已能透明计算，引入可选依赖不会改善 Fast Research 核心正确性。
 
+## Phase 5 Portfolio & Risk v1
+
+`china_cta.portfolio` 直接消费 Phase 3 的五列 factor table。`signal` 不会再次做 clipping、tanh、z-score 或 rank normalization；它也不会被解释为 position。一个或多个 factor 使用显式 `strategy_weights` 形成可追溯贡献表。
+
+### 波动率与风险权重
+
+波动率输入是 Phase 2 `pre + prev_close_ratio` 的 research continuous close，仅用于风险估计：
+
+```text
+simple_return(t) = close(t) / close(t-1) - 1
+raw_volatility(t) = rolling_sample_std(simple_return) * sqrt(annualization_factor)
+vol_forecast(t) = max(raw_volatility(t), explicit_volatility_floor)
+
+strategy_risk_contribution = strategy_weight * signal / vol_forecast
+aggregated_risk = sum(strategy_risk_contribution)
+```
+
+缺失价格不填充；历史不足、零或负 raw volatility 均为 unavailable。vol floor 只保护正但过小的有效预测。缺失 strategy 不重新归一化其余权重，避免因为数据缺失悄悄改变组合语义。
+
+约束固定按下列顺序执行，并在 diagnostics 中保留每一步 pre/post/scale：
+
+```text
+aggregated inverse-vol risk
+→ instrument clip
+→ sector gross proportional scale
+→ industrial-chain gross proportional scale
+→ diagonal portfolio risk scale
+```
+
+diagonal v1 定义为：
+
+```text
+estimated_portfolio_risk = sqrt(sum((weight_i * vol_i) ** 2))
+portfolio_scale_factor = portfolio_vol_target / estimated_portfolio_risk
+post_scale_exposure = constrained_exposure * portfolio_scale_factor
+```
+
+当前没有足以证明 covariance framework 必要的稳定 strategy sleeves，因此不实现 covariance、shrinkage、PSD repair、HRP 或优化器。
+
+### 分类、真实合约与时间语义
+
+`config/product_classification_v1.yaml` 是版本化风险分组，不是 RQData PIT 行业数据，也不决定历史 universe。v1 只含已人工确认的 RB、CU、IF；启用 sector/chain cap 时，未知品种会明确报缺失，不会落入隐含 `Other`。
+
+信号日 `t` 使用截至该日收盘的 signal、continuous close、真实 Trade Contract settlement、volume 和 OI。Target Position 在下一交易日 `t+1` 生效：
+
+```text
+signal information date       = close of t
+Trade Contract                = RQData rule=0/rank=1 dominant for t+1
+trade price for sizing        = that real contract's settlement on t
+margin parameters             = direction-specific pre-open values for t+1
+portfolio decision finalized  = pre-open of t+1
+earliest execution            = trading session t+1
+```
+
+因此没有用 `t+1` 价格计算可在 `t+1` 执行的目标。若 dominant、真实价格、乘数或所需方向保证金率不可用，该品种不产生 target，并在 diagnostics 写明 reason；不会偷偷改选其他合约。
+
+### 资本、保证金与整数手数
+
+完整单位链为：
+
+```text
+target_notional = initial_capital * post_scale_exposure
+contract_notional = settlement_t * contract_multiplier
+pre_margin_quantity_float = target_notional / contract_notional
+
+estimated_margin_pre = abs(target_notional) * directional_margin_ratio
+margin_limit = initial_capital * max_margin_fraction
+margin_scale = min(1, margin_limit / total_estimated_margin_pre)
+
+target_quantity = trunc_toward_zero(
+    pre_margin_quantity_float * margin_scale
+)
+```
+
+margin scale 是同一目标日的整体比例缩放，只是投资决策 sanity check；它不冻结现金、不处理逐日盯市、拒单或账户权益。正式 margin/accounting 留给 RQAlpha Plus。
+
+正式 Target Position 只含：
+
+```text
+trading_date, order_book_id, target_quantity, source_tag
+```
+
+这里的 `trading_date` 明确表示 **target effective date / earliest execution
+trading date**，不是 factor/signal information date。对收盘后生成的 `t` 日
+signal，正式 target table 的 `trading_date` 为下一交易日 `t+1`。
+
+另外返回：
+
+- `contributions`：逐 factor 的原始 signal、显式权重、vol 和 inverse-vol contribution。
+- `diagnostics`：所有约束、portfolio scale、真实合约、价格、乘数、margin 与整数化计算链。
+- `metadata`：全部会改变手数的配置、公式、时点语义和输入指纹。
+
+`abs(target_quantity) / daily_volume` 与 `abs(target_quantity) / open_interest` 只作 capacity diagnostics，不改变手数、不选合约，也不是容量优化。
+
 ## 环境
 
 项目解释器固定为：
@@ -270,10 +367,17 @@ $env:RUN_RQDATA_INTEGRATION = "1"
 & "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_fast_backtest_integration.py -q
 ```
 
+Phase 5 的 RB/CU/IF volatility、Trend/Carry 聚合、下一交易日 Trade Contract、历史 margin、整数手数与未来数据扰动验收：
+
+```powershell
+$env:RUN_RQDATA_INTEGRATION = "1"
+& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_portfolio_integration.py -q
+```
+
 `check_rqdata.py` 会读取最近一个已完成交易日的 RB 主力合约日线。`smoke_rqalpha_futures.py` 使用本机 `data/rqalpha_bundle_futures_smoke/` 中已验证的期货 bundle，对 `AG1612` 做一手日频正式回测，并检查成交与 NAV 输出。
 
 该本地 bundle 只验证了期货数据；因基础数据更新时 RQData 流量耗尽，里面的股票和指数文件不得用于研究。正式研究开始前，应按实际日期范围准备有效的 RQAlpha Plus 数据。
 
 ## 当前停止边界
 
-Phase 4 到此为止。Portfolio、Risk、Volatility Targeting、Position Sizing、Target Quantity 和正式回测 adapter 均未实现，未经明确授权不进入 Phase 5。
+Phase 5 到此为止。订单、撮合、正式手续费、保证金账户、逐日盯市、NAV 和 RQAlpha Plus adapter 均未实现，未经明确授权不进入 Phase 6。

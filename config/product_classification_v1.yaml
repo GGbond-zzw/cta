@@ -1,0 +1,15 @@
+version: product_classification_v1
+
+# This is a small risk-grouping config, not provider PIT sector metadata.
+# It does not determine research-universe membership. Add a product only after
+# its risk classification is explicitly reviewed.
+products:
+  RB:
+    sector: ferrous_metals
+    industrial_chain: steel
+  CU:
+    sector: nonferrous_metals
+    industrial_chain: base_metals
+  IF:
+    sector: equity_index
+    industrial_chain: equity_index
