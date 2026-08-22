@@ -17,7 +17,8 @@ Ricequant 负责行情与合约数据，以及正式回测中的订单、撮合�
 - Phase 3 已完成：统一 factor table，以及可人工复算的 60 日 Trend 和真实 near/main 合约 Carry baseline 已验证。
 - Phase 4 已完成：显式 execution lag 的 Fast Research Backtest、基础 diagnostics、year/instrument breakdown、薄 parameter surface 和本地可复现摘要已验证。
 - Phase 5 已完成：滚动波动率、固定策略聚合、透明约束、diagonal risk scale、真实 Trade Contract、整数目标手数、margin sanity 和 capacity diagnostics 已验证。
-- 当前正式输出止于 Target Position；它不是订单、成交、现金 P&L、正式 NAV 或投资建议。正式账户模拟属于 Phase 6 RQAlpha Plus。
+- Phase 6 已完成：Phase 5 Target Position 可由薄 adapter 直接送入 RQAlpha Plus，日频 `order_to`、原生期货账户/撮合/费用/NAV、结果持久化和轻量 loader 已验证。
+- Target Position 之前的投资决策属于本项目；Target Position 之后的订单、成交、正式账户和 NAV 以 RQAlpha 原生结果为准。
 - `data/` 中的旧快照和本地 RQAlpha 结果仅作为本机验证资料保留，已整体排除在 Git 之外，不再是新架构的依赖。
 
 当前最小目录：
@@ -37,7 +38,9 @@ china_cta/
   portfolio/
     volatility.py   # PIT rolling close-to-close volatility
     allocation.py   # 约束、diagonal risk、真实合约与整数目标手数
-  formal_backtest/  # RQAlpha Plus 对接（后续阶段）
+  formal_backtest/
+    adapter.py     # Target schedule → run_func / order_to
+    results.py     # RQAlpha 原生结果的轻量读取
   validation/       # 对账、归因和稳健性（后续阶段）
 scripts/
   check_rqdata.py
@@ -302,6 +305,45 @@ signal，正式 target table 的 `trading_date` 为下一交易日 `t+1`。
 
 `abs(target_quantity) / daily_volume` 与 `abs(target_quantity) / open_interest` 只作 capacity diagnostics，不改变手数、不选合约，也不是容量优化。
 
+## Phase 6 RQAlpha Plus Formal Backtest
+
+正式输入直接使用 Phase 5 schema：
+
+```text
+trading_date, order_book_id, target_quantity, source_tag
+```
+
+`trading_date` 仍表示 target effective date / earliest execution trading date，
+不是 signal information date。Phase 6 不再 shift 日期，不重新计算 Alpha、组合、
+Trade Contract 或手数。每个出现的 `trading_date` 是完整目标快照；先前目标合约若在
+新快照中消失，adapter 将其解释为目标 0，以完成旧合约退出。
+
+日频 v1 使用 `init + handle_bar`：`init` 校验并设置所有真实期货合约池，
+`handle_bar(t)` 只读取 `t` 的预生成目标并调用：
+
+```text
+order_to(actual_contract, target_quantity)
+```
+
+默认显式配置 `frequency=1d`、`matching_type=current_bar`。订单在目标日的日 bar
+回调提交并按 RQAlpha 日频规则撮合；adapter 不读取该 bar 形成投资决策，因此没有
+额外一天 lag，也没有用当日 bar 重算目标。v1 不实现分钟或 tick。
+
+`FormalBacktestConfig` 显式记录初始资金、bundle、日期、撮合、成交量比例、涨跌停、
+无成交量限制、内置滑点、历史期货交易参数、结算价类型、手续费与保证金倍率。
+`futures_time_series_trading_parameters=True` 是 Phase 6 必需条件。
+
+每次运行在忽略 Git 的 `results/formal_backtest/<fingerprint>/` 保存：
+
+- RQAlpha `sys_analyser` 原生 pickle；
+- RQAlpha 原生 CSV report；
+- adapter metadata、目标提交记录和 `order_to` Order 状态。
+
+轻量 loader 只暴露 `portfolio`、`future_account`、`future_positions`、`trades`、
+`orders`、`transaction_costs` 与 metadata。它不重算 NAV、MTM、保证金或账户；
+RQAlpha `sys_analyser` 始终是正式 source of truth。`orders` 保留 status、message、
+filled/unfilled quantity，供后续 reconciliation 使用。
+
 ## 环境
 
 项目解释器固定为：
@@ -374,10 +416,17 @@ $env:RUN_RQDATA_INTEGRATION = "1"
 & "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_portfolio_integration.py -q
 ```
 
+Phase 6 的日频 Target schedule、long/flat/short/flat、历史期货参数、原生结果与重复运行验收：
+
+```powershell
+$env:RUN_RQALPHA_INTEGRATION = "1"
+& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_formal_backtest_integration.py -q
+```
+
 `check_rqdata.py` 会读取最近一个已完成交易日的 RB 主力合约日线。`smoke_rqalpha_futures.py` 使用本机 `data/rqalpha_bundle_futures_smoke/` 中已验证的期货 bundle，对 `AG1612` 做一手日频正式回测，并检查成交与 NAV 输出。
 
 该本地 bundle 只验证了期货数据；因基础数据更新时 RQData 流量耗尽，里面的股票和指数文件不得用于研究。正式研究开始前，应按实际日期范围准备有效的 RQAlpha Plus 数据。
 
 ## 当前停止边界
 
-Phase 5 到此为止。订单、撮合、正式手续费、保证金账户、逐日盯市、NAV 和 RQAlpha Plus adapter 均未实现，未经明确授权不进入 Phase 6。
+Phase 6 到此为止。正式回测只通过薄 adapter 使用 RQAlpha Plus 原生订单、撮合、账户、保证金、MTM 与 NAV；Phase 7 Golden Reconciliation 尚未开始。
