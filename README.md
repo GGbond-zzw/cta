@@ -344,6 +344,70 @@ order_to(actual_contract, target_quantity)
 RQAlpha `sys_analyser` 始终是正式 source of truth。`orders` 保留 status、message、
 filled/unfilled quantity，供后续 reconciliation 使用。
 
+## Phase 7 Golden Reconciliation 与 v1 使用路径
+
+新研究员不需要编写新的回测引擎。v1 的最短操作路径是：
+
+1. 在 VS Code 选择下文固定的 `cta` 解释器，并确认 RQSDK license 可用。
+2. 用 `RQDataAdapter` / `china_cta.data.contracts` 拉取 PIT universe、连续研究价和真实 curve。
+3. 提交标准 Factor table：
+
+   ```text
+   trading_date, instrument, factor_name, raw_factor, signal
+   ```
+
+4. 用 `run_fast_backtest` 快速判断 Alpha 是否值得进入正式回测；其连续价收益、turnover 和累计收益都只是 research diagnostics。
+5. 用 `construct_target_positions` 把一个或多个标准 signal 转换为正式 Target Position：
+
+   ```text
+   trading_date, order_book_id, target_quantity, source_tag
+   ```
+
+6. 用 `run_formal_backtest` 原样消费 Target Position；RQAlpha Plus 原生处理订单、撮合、手续费、保证金、逐日盯市、账户和 NAV。
+7. 从返回值或 `results/formal_backtest/<fingerprint>/` 查看原生 `portfolio`、`future_account`、`future_positions`、`trades`、订单状态和 report。不要用 Fast Research 累计收益替代正式 NAV。
+
+`china_cta.validation.reconcile_close_based_mtm` 只服务于小型 Golden 案例：在日频
+`current_bar`、`futures_settlement_price_type=close`、零滑点配置下复算：
+
+```text
+manual position P&L
+= previous-close signed position
+  * (close_t - close_t_minus_1)
+  * contract multiplier
+
+manual daily P&L
+= manual position P&L
+  + RQAlpha native trading P&L
+  - RQAlpha native transaction cost
+```
+
+它不计算或替代正式 margin、MTM、account 或 NAV。Golden A/B 分别证明 long/short
+方向；C 验证 `+1 → 0 → -1 → 0`；D 验证 `AG1606 → AG1612` 换月；F 使用真实历史
+bar 验证涨停拒单、零成交量取消和成交量比例取消。固定回归规格位于
+`config/golden_backtest_v1.json`，仅是一条小、快、可解释的 regression baseline，
+不是策略业绩声明。如果版本、bundle 或结果变化，必须先解释差异，不能直接更新
+expected values。
+
+### Look-ahead Checklist
+
+- **Signal lag**：Phase 3 的 `trading_date=t` 使用 t 日收盘后信息，最早只能用于下一交易时段；Phase 4 以显式 `execution_lag` 对齐 forward research return。
+- **Target date**：Phase 5 输出的 `trading_date=t+1` 已是 target effective / earliest execution date；Phase 6 不把它当 signal date，也不再次 shift。
+- **Formal callback**：日频 `handle_bar(t)` 只读取预生成的 t 日 Target Position。adapter 不用当前 bar 重算 signal、dominant、权重或手数；`current_bar` 只由 RQAlpha matcher 用作 t 日收盘成交假设。
+- **`history_bars` visibility**：RQAlpha 官方日频口径下，`before_trading(t)` 最多看到 t-1 日线，`handle_bar(t)` 可看到 t 日线。当前 adapter 不调用 `history_bars` 做投资决策，因此不会把 handle-bar 可见的 t 日数据反向写入 t 日目标。
+- **Dominant map**：Phase 2/5 对真实 Trade Contract 的选择按历史日期调用 RQData `rule=0, rank=1`，不使用今天的 dominant 反填历史。
+- **Trading parameters**：Phase 5 只用历史可用字段做 margin sanity；Phase 6 强制 `futures_time_series_trading_parameters=True`，正式手续费、保证金和账户限制由 RQAlpha 原生处理。
+- **Night session**：Phase 6 v1 只有日频，没有分钟/tick 或自定义夜盘执行窗口；若未来进入分钟回测，必须另行锁定 next-bar/下一可交易窗口语义。
+
+相关行为口径见 [RQAlpha Plus 下单接口](https://www.ricequant.com/doc/rqalpha-plus/api/order-api)、[回测配置](https://www.ricequant.com/doc/rqalpha-plus/api/config)、[数据可见性](https://www.ricequant.com/doc/rqalpha-plus/api/data-api) 和 [结果对象](https://www.ricequant.com/doc/rqalpha-plus/api/types)。
+
+### v1 已知限制
+
+- 日频 Target Position 每个合约/交易日只有一个完整目标快照，不能表达同一天先开仓、随后又归零的两个盘中决策。因此 Golden E 已验证普通 `OPEN/CLOSE` 手续费；显式日内 `CLOSE_TODAY` 留作书面限制。没有切换到 `buy_open/sell_close` 状态机。
+- `order_to` 的本机实现能够按实际昨仓/今仓选择 `CLOSE/CLOSE_TODAY`，但当前 v1 没有分钟级 Target schedule 来稳定制造同日平今 Golden case。
+- RQAlpha analyser 的逐日账户表将部分费用/P&L 显示到 4 位小数，trade 记录保留更高精度；Golden expected summary 分别按各自原生精度核对，不硬编码调平。
+- Golden baseline 固定在 rqalpha 6.3.0、rqalpha-plus 4.5.0、rqdatac 3.6.3 和本机 Phase 0 futures bundle。供应商版本或数据修订可能造成有理由的 regression。
+- Phase 7 不增加 tick、容量/冲击模型、自研 OMS、撮合、期货账户、MTM 或 NAV。
+
 ## 环境
 
 项目解释器固定为：
@@ -423,10 +487,25 @@ $env:RUN_RQALPHA_INTEGRATION = "1"
 & "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_formal_backtest_integration.py -q
 ```
 
+Phase 7 的 Golden A–F、逐日 MTM 对账和冻结回归（只需要 RQAlpha license）：
+
+```powershell
+$env:RUN_RQALPHA_INTEGRATION = "1"
+& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_golden_reconciliation_integration.py -q
+```
+
+同一文件中的 Trend+Carry → Portfolio → Formal 小型全链路测试还需要开启 RQData integration：
+
+```powershell
+$env:RUN_RQALPHA_INTEGRATION = "1"
+$env:RUN_RQDATA_INTEGRATION = "1"
+& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_golden_reconciliation_integration.py -q
+```
+
 `check_rqdata.py` 会读取最近一个已完成交易日的 RB 主力合约日线。`smoke_rqalpha_futures.py` 使用本机 `data/rqalpha_bundle_futures_smoke/` 中已验证的期货 bundle，对 `AG1612` 做一手日频正式回测，并检查成交与 NAV 输出。
 
 该本地 bundle 只验证了期货数据；因基础数据更新时 RQData 流量耗尽，里面的股票和指数文件不得用于研究。正式研究开始前，应按实际日期范围准备有效的 RQAlpha Plus 数据。
 
 ## 当前停止边界
 
-Phase 6 到此为止。正式回测只通过薄 adapter 使用 RQAlpha Plus 原生订单、撮合、账户、保证金、MTM 与 NAV；Phase 7 Golden Reconciliation 尚未开始。
+Phase 7 到此为止。v1 的 Golden reconciliation、look-ahead checklist 和固定 regression baseline 已建立；没有新增投资功能，也没有开始任何后续开发或 final Git freeze。

@@ -1,0 +1,111 @@
+{
+  "golden_id": "phase7_ag1612_fixed_long_v1",
+  "purpose": "Small deterministic regression baseline, not a performance claim",
+  "required_versions": {
+    "rqalpha": "6.3.0",
+    "rqalpha-plus": "4.5.0",
+    "rqdatac": "3.6.3"
+  },
+  "data_bundle_ref": "local_phase0_futures_smoke_bundle",
+  "universe": ["AG1612"],
+  "target_positions": [
+    {
+      "trading_date": "2016-06-01",
+      "order_book_id": "AG1612",
+      "target_quantity": 1,
+      "source_tag": "golden_a_long"
+    },
+    {
+      "trading_date": "2016-06-08",
+      "order_book_id": "AG1612",
+      "target_quantity": 0,
+      "source_tag": "golden_a_long"
+    }
+  ],
+  "target_fingerprint": "9b34d8cab354d8c9df7331b8f79b061b8828ab432bc225e86cfa88ef8b4c0a3e",
+  "formal_config": {
+    "start_date": "2016-06-01",
+    "end_date": "2016-06-10",
+    "initial_capital": 1000000.0,
+    "frequency": "1d",
+    "matching_type": "current_bar",
+    "volume_limit": true,
+    "volume_percent": 0.25,
+    "price_limit": true,
+    "inactive_limit": true,
+    "slippage_model": "PriceRatioSlippage",
+    "slippage_value": 0.0,
+    "futures_time_series_trading_parameters": true,
+    "futures_settlement_price_type": "close",
+    "futures_commission_multiplier": 1.0,
+    "margin_multiplier": 1.0,
+    "strategy_name": "phase7_golden_backtest_v1"
+  },
+  "expected_summary": {
+    "final_total_value": 1001823.97585,
+    "final_unit_net_value": 1.00182397585,
+    "total_trade_transaction_cost": 6.02415,
+    "order_count": 2,
+    "filled_order_count": 2,
+    "trade_count": 2,
+    "final_margin": 0.0,
+    "maximum_absolute_daily_reconciliation_difference": 0.0,
+    "daily": [
+      {
+        "trading_date": "2016-06-01",
+        "accounting_price": 3590.0,
+        "position_at_close": 1,
+        "manual_gross_pnl_component": 0.0,
+        "rqalpha_transaction_cost": 2.9618,
+        "rqalpha_daily_pnl": -2.9618,
+        "rqalpha_total_value": 999997.0382
+      },
+      {
+        "trading_date": "2016-06-02",
+        "accounting_price": 3593.0,
+        "position_at_close": 1,
+        "manual_gross_pnl_component": 45.0,
+        "rqalpha_transaction_cost": 0.0,
+        "rqalpha_daily_pnl": 45.0,
+        "rqalpha_total_value": 1000042.0382
+      },
+      {
+        "trading_date": "2016-06-03",
+        "accounting_price": 3601.0,
+        "position_at_close": 1,
+        "manual_gross_pnl_component": 120.0,
+        "rqalpha_transaction_cost": 0.0,
+        "rqalpha_daily_pnl": 120.0,
+        "rqalpha_total_value": 1000162.0382
+      },
+      {
+        "trading_date": "2016-06-06",
+        "accounting_price": 3667.0,
+        "position_at_close": 1,
+        "manual_gross_pnl_component": 990.0,
+        "rqalpha_transaction_cost": 0.0,
+        "rqalpha_daily_pnl": 990.0,
+        "rqalpha_total_value": 1001152.0382
+      },
+      {
+        "trading_date": "2016-06-07",
+        "accounting_price": 3677.0,
+        "position_at_close": 1,
+        "manual_gross_pnl_component": 150.0,
+        "rqalpha_transaction_cost": 0.0,
+        "rqalpha_daily_pnl": 150.0,
+        "rqalpha_total_value": 1001302.0382
+      },
+      {
+        "trading_date": "2016-06-08",
+        "accounting_price": 3712.0,
+        "position_at_close": 0,
+        "manual_gross_pnl_component": 525.0,
+        "rqalpha_transaction_cost": 3.0624,
+        "rqalpha_daily_pnl": 521.9376,
+        "rqalpha_total_value": 1001823.9758
+      }
+    ]
+  },
+  "update_policy": "Explain any regression before changing expected values"
+}
