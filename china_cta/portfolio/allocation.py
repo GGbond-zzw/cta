@@ -313,6 +313,9 @@ def construct_target_positions(
 
     _validate_config(config)
     factors = _normalize_factors(factor_table)
+    requested_signal_dates = pd.DatetimeIndex(
+        factors["trading_date"].dropna().unique()
+    )
     eligible = _normalize_universe(universe)
     market = _normalize_market_data(portfolio_market_data)
     classification_version = classifications.attrs.get("version", "unversioned")
@@ -565,6 +568,13 @@ def construct_target_positions(
             "Target positions contain duplicate date/contract rows"
         )
 
+    rebalance_dates = pd.DatetimeIndex(
+        market.loc[
+            market["signal_date"].isin(requested_signal_dates),
+            "target_effective_date",
+        ].dropna().unique()
+    ).normalize().sort_values()
+
     metadata = {
         "portfolio_version": "portfolio_risk_v1",
         "config": _config_metadata(config),
@@ -587,6 +597,10 @@ def construct_target_positions(
         ),
         "portfolio_decision_at": "pre_open_of_target_effective_date",
         "earliest_execution_at": "target_effective_date_trading_session",
+        "rebalance_date_definition": (
+            "complete_target_snapshot_effective_date_including_empty_snapshots"
+        ),
+        "rebalance_dates": [date.date().isoformat() for date in rebalance_dates],
         "margin_sanity_only": True,
         "formal_margin_accounting": False,
         "capacity_diagnostics_only": True,
@@ -608,6 +622,7 @@ def construct_target_positions(
             ),
             "portfolio_decision_at": metadata["portfolio_decision_at"],
             "earliest_execution_at": metadata["earliest_execution_at"],
+            "rebalance_dates": metadata["rebalance_dates"],
             "contains_orders": False,
             "contains_cash_pnl": False,
         }
@@ -621,6 +636,7 @@ def construct_target_positions(
     )
     return {
         "targets": targets,
+        "rebalance_dates": rebalance_dates,
         "diagnostics": diagnostics,
         "contributions": contributions,
         "metadata": metadata,

@@ -192,6 +192,65 @@ def test_complete_snapshot_closes_contract_omitted_after_roll(
     assert implicit["requested_target_quantity"] == 0
 
 
+def test_empty_complete_snapshot_flattens_all_previously_targeted_contracts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    observed = install_fake_rqalpha(monkeypatch)
+    targets = target_frame(
+        [
+            (DATES[0], "RB2010", 1),
+            (DATES[0], "CU2007", 1),
+        ]
+    )
+    targets.attrs["rebalance_dates"] = [
+        DATES[0].date().isoformat(),
+        DATES[1].date().isoformat(),
+    ]
+
+    result = run_formal_backtest(targets, formal_config(tmp_path))
+
+    assert observed["orders"] == [
+        (DATES[0], "CU2007", 1),
+        (DATES[0], "RB2010", 1),
+        (DATES[1], "CU2007", 0),
+        (DATES[1], "RB2010", 0),
+    ]
+    flattened = result["target_executions"].loc[
+        result["target_executions"]["target_trading_date"].eq(DATES[1])
+    ]
+    assert set(flattened["order_book_id"]) == {"RB2010", "CU2007"}
+    assert flattened["requested_target_quantity"].eq(0).all()
+    assert flattened["implicit_zero"].all()
+    assert result["metadata"]["empty_complete_snapshot_dates"] == [
+        DATES[1].date().isoformat()
+    ]
+
+
+def test_date_without_rebalance_snapshot_does_not_flatten_positions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    observed = install_fake_rqalpha(monkeypatch)
+    targets = target_frame(
+        [
+            (DATES[0], "RB2010", 1),
+            (DATES[0], "CU2007", 1),
+        ]
+    )
+
+    result = run_formal_backtest(
+        targets,
+        formal_config(tmp_path),
+        rebalance_dates=[DATES[0]],
+    )
+
+    assert observed["orders"] == [
+        (DATES[0], "CU2007", 1),
+        (DATES[0], "RB2010", 1),
+    ]
+    assert set(result["target_executions"]["target_trading_date"]) == {DATES[0]}
+    assert result["metadata"]["empty_complete_snapshot_dates"] == []
+
+
 def test_formal_config_is_explicit_and_historical_parameters_are_required(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

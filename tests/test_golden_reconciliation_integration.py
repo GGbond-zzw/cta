@@ -476,6 +476,7 @@ def test_trend_and_carry_share_factor_portfolio_formal_pipeline(
             futures_settlement_price_type="close",
             strategy_name="phase7_trend_carry_end_to_end",
         ),
+        rebalance_dates=portfolio_result["rebalance_dates"],
     )
     assert set(formal_result["target_executions"]["order_book_id"]) == set(
         targets["order_book_id"]

@@ -356,7 +356,7 @@ filled/unfilled quantity，供后续 reconciliation 使用。
    trading_date, instrument, factor_name, raw_factor, signal
    ```
 
-4. 用 `run_fast_backtest` 快速判断 Alpha 是否值得进入正式回测；其连续价收益、turnover 和累计收益都只是 research diagnostics。
+4. 用 `run_fast_research_backtest` 快速判断 Alpha 是否值得进入正式回测；其连续价收益、turnover 和累计收益都只是 research diagnostics。
 5. 用 `construct_target_positions` 把一个或多个标准 signal 转换为正式 Target Position：
 
    ```text
@@ -508,4 +508,4 @@ $env:RUN_RQDATA_INTEGRATION = "1"
 
 ## 当前停止边界
 
-Phase 7 到此为止。v1 的 Golden reconciliation、look-ahead checklist 和固定 regression baseline 已建立；没有新增投资功能，也没有开始任何后续开发或 final Git freeze。
+Phase 7 到此为止。v1 的 Golden reconciliation、look-ahead checklist 和固定 regression baseline 已建立；`backtest-v1` 已完成 final Git freeze，没有开始任何后续开发。

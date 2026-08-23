@@ -464,6 +464,29 @@ def test_missing_signal_and_non_baseline_trade_contract_are_unavailable() -> Non
     assert "RB2005" not in set(second["targets"]["order_book_id"])
 
 
+def test_all_unavailable_targets_still_publish_complete_rebalance_date() -> None:
+    unavailable = factors()
+    unavailable["signal"] = np.nan
+
+    result = construct_target_positions(
+        unavailable,
+        research_prices(),
+        universe(),
+        market_data(),
+        classifications(),
+        config(),
+    )
+
+    assert result["targets"].empty
+    assert result["rebalance_dates"].equals(pd.DatetimeIndex([TARGET_DATE]))
+    assert result["targets"].attrs["rebalance_dates"] == [
+        TARGET_DATE.date().isoformat()
+    ]
+    assert result["metadata"]["rebalance_dates"] == [
+        TARGET_DATE.date().isoformat()
+    ]
+
+
 def test_future_price_change_cannot_change_an_earlier_target() -> None:
     original_prices = research_prices()
     changed_prices = original_prices.copy()

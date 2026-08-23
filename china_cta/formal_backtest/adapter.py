@@ -7,6 +7,7 @@ import importlib.metadata
 import json
 import math
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final, Mapping
@@ -87,20 +88,29 @@ class FormalBacktestConfig:
 def run_formal_backtest(
     target_positions: pd.DataFrame,
     config: FormalBacktestConfig,
+    *,
+    rebalance_dates: Iterable[object] | None = None,
 ) -> dict[str, Any]:
     """Run a daily RQAlpha Plus backtest from complete target snapshots.
 
     A target row's ``trading_date`` is its effective / earliest execution
     trading date.  On that date's daily ``handle_bar`` callback, the adapter
     submits ``order_to(actual_contract, target_quantity)`` without another
-    date shift.  Each date is a complete target snapshot: contracts targeted
-    previously but absent from a later snapshot are submitted with target 0.
+    date shift. ``rebalance_dates`` identifies complete snapshot dates,
+    including snapshots with no target rows. Contracts targeted previously but
+    absent from a later snapshot are submitted with target 0. Dates outside
+    ``rebalance_dates`` do not rebalance and leave prior targets unchanged.
     """
 
     _validate_config(config)
+    if rebalance_dates is None:
+        rebalance_dates = target_positions.attrs.get("rebalance_dates")
     targets = _normalize_target_positions(target_positions, config)
+    normalized_rebalance_dates = _normalize_rebalance_dates(
+        targets, rebalance_dates, config
+    )
     versions = _installed_versions()
-    target_fingerprint = _target_fingerprint(targets)
+    target_fingerprint = _target_fingerprint(targets, normalized_rebalance_dates)
     config_metadata = _config_metadata(config)
     run_fingerprint = _run_fingerprint(
         target_fingerprint, config_metadata, versions
@@ -115,7 +125,7 @@ def run_formal_backtest(
     executions_path = run_directory / "target_executions.csv"
     run_directory.mkdir(parents=True, exist_ok=True)
 
-    schedule = _build_target_schedule(targets)
+    schedule = _build_target_schedule(targets, normalized_rebalance_dates)
     contract_ids = sorted(targets["order_book_id"].unique().tolist())
     state: dict[str, Any] = {
         "processed_dates": set(),
@@ -125,8 +135,9 @@ def run_formal_backtest(
     }
 
     def init(context: Any) -> None:
-        _validate_rqalpha_instruments(contract_ids)
-        update_universe(contract_ids)
+        if contract_ids:
+            _validate_rqalpha_instruments(contract_ids)
+            update_universe(contract_ids)
         context.phase6_target_schedule = schedule
         context.phase6_processed_dates = state["processed_dates"]
 
@@ -167,6 +178,14 @@ def run_formal_backtest(
         "target_source_tags": sorted(targets["source_tag"].unique().tolist()),
         "target_position_schema": list(TARGET_POSITION_COLUMNS),
         "target_schedule_semantics": "complete_position_snapshot_per_trading_date",
+        "rebalance_dates": [
+            date.date().isoformat() for date in normalized_rebalance_dates
+        ],
+        "empty_complete_snapshot_dates": [
+            date.date().isoformat()
+            for date in normalized_rebalance_dates
+            if date not in set(targets["trading_date"])
+        ],
         "target_trading_date_definition": (
             "target_effective_date_earliest_execution_trading_date"
         ),
@@ -211,8 +230,6 @@ def _normalize_target_positions(
     ]
     if missing:
         raise ValueError(f"Target Position is missing required columns: {missing}")
-    if target_positions.empty:
-        raise ValueError("Target Position cannot be empty")
 
     role = target_positions.attrs.get("trading_date_role")
     expected_role = "target_effective_date_earliest_execution_trading_date"
@@ -268,6 +285,47 @@ def _normalize_target_positions(
     )
 
 
+def _normalize_rebalance_dates(
+    targets: pd.DataFrame,
+    rebalance_dates: Iterable[object] | None,
+    config: FormalBacktestConfig,
+) -> pd.DatetimeIndex:
+    if rebalance_dates is None:
+        dates = pd.DatetimeIndex(targets["trading_date"].unique())
+    else:
+        if isinstance(rebalance_dates, (str, bytes)):
+            raise ValueError("rebalance_dates must be an iterable of dates")
+        dates = pd.DatetimeIndex(pd.to_datetime(list(rebalance_dates), errors="raise"))
+
+    if dates.empty:
+        raise ValueError("At least one rebalance date is required")
+    if dates.hasnans:
+        raise ValueError("rebalance_dates cannot contain missing values")
+    if dates.tz is not None:
+        raise ValueError("rebalance_dates must be timezone-naive trading dates")
+    if not dates.equals(dates.normalize()):
+        raise ValueError("rebalance_dates must not contain a time component")
+    if dates.duplicated().any():
+        raise ValueError("rebalance_dates cannot contain duplicates")
+    dates = dates.sort_values()
+
+    target_dates = pd.DatetimeIndex(targets["trading_date"].unique())
+    missing_target_dates = target_dates.difference(dates)
+    if not missing_target_dates.empty:
+        missing = ", ".join(
+            date.date().isoformat() for date in missing_target_dates
+        )
+        raise ValueError(
+            "Every Target Position date must be a rebalance date: " + missing
+        )
+
+    start_date = pd.Timestamp(config.start_date).normalize()
+    end_date = pd.Timestamp(config.end_date).normalize()
+    if (dates < start_date).any() or (dates > end_date).any():
+        raise ValueError("rebalance_dates must be inside the formal run range")
+    return dates
+
+
 def _validate_config(config: FormalBacktestConfig) -> None:
     start_date = pd.Timestamp(config.start_date).normalize()
     end_date = pd.Timestamp(config.end_date).normalize()
@@ -313,8 +371,11 @@ def _validate_config(config: FormalBacktestConfig) -> None:
 
 def _build_target_schedule(
     targets: pd.DataFrame,
+    rebalance_dates: pd.DatetimeIndex,
 ) -> dict[pd.Timestamp, dict[str, tuple[int, str]]]:
-    schedule: dict[pd.Timestamp, dict[str, tuple[int, str]]] = {}
+    schedule: dict[pd.Timestamp, dict[str, tuple[int, str]]] = {
+        pd.Timestamp(target_date): {} for target_date in rebalance_dates
+    }
     for target_date, daily in targets.groupby("trading_date", sort=True):
         schedule[pd.Timestamp(target_date)] = {
             row.order_book_id: (int(row.target_quantity), str(row.source_tag))
@@ -513,10 +574,26 @@ def _installed_versions() -> dict[str, str]:
     }
 
 
-def _target_fingerprint(targets: pd.DataFrame) -> str:
+def _target_fingerprint(
+    targets: pd.DataFrame,
+    rebalance_dates: pd.DatetimeIndex,
+) -> str:
     canonical = targets.copy()
     canonical["trading_date"] = canonical["trading_date"].dt.strftime("%Y-%m-%d")
     payload = canonical.to_dict(orient="records")
+    target_dates = set(targets["trading_date"])
+    empty_snapshot_dates = [
+        date.date().isoformat()
+        for date in rebalance_dates
+        if date not in target_dates
+    ]
+    if empty_snapshot_dates:
+        return _json_sha256(
+            {
+                "target_positions": payload,
+                "empty_complete_snapshot_dates": empty_snapshot_dates,
+            }
+        )
     return _json_sha256(payload)
 
 
