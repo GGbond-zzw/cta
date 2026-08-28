@@ -22,6 +22,7 @@ def load_formal_result(
     source of truth for NAV, positions, trades, fees, margin, and MTM.
     """
 
+    # 这里只做字段整理；NAV、保证金、MTM 和费用始终以 RQAlpha 原生 analyser 为准。
     native = _read_native_result(source)
     analyser = native.get("sys_analyser", native)
     if not isinstance(analyser, Mapping):

@@ -8,6 +8,7 @@ import pytest
 from china_cta.data.contracts import (
     get_contract_snapshot,
     get_research_universe,
+    get_roll_map,
     get_signal_continuous_price,
 )
 from china_cta.data.rqdata_adapter import RQDataAdapter, RQDataConfig
@@ -16,6 +17,10 @@ from china_cta.factors.carry import (
     compute_carry_factor,
 )
 from china_cta.factors.schema import FACTOR_COLUMNS
+from china_cta.factors.oi_confirmed_trend import (
+    calculate_oi_confirmed_trend,
+    compute_oi_confirmed_trend_factor,
+)
 from china_cta.factors.trend import compute_trend_factor
 
 
@@ -29,6 +34,7 @@ pytestmark = [
 
 TREND_DATE = "2020-06-15"
 CARRY_DATE = "2020-06-12"
+OI_DATE = "2020-05-07"
 
 
 def licensed_adapter(tmp_path) -> RQDataAdapter:
@@ -107,3 +113,60 @@ def test_rb_cu_carry_matches_manual_and_rqdata_benchmark(tmp_path) -> None:
         )
         assert own["raw_factor"] == pytest.approx(expected)
         assert own["raw_factor"] == pytest.approx(official["annualized_yield"])
+
+
+def test_oi_confirmed_trend_uses_real_pit_data_and_masks_rolls(tmp_path) -> None:
+    adapter = licensed_adapter(tmp_path)
+    products = ("RB", "CU", "IF")
+    prices = get_signal_continuous_price(
+        adapter,
+        products,
+        "2020-01-15",
+        OI_DATE,
+        fields=("close", "open_interest"),
+        adjust_type="pre",
+        adjust_method="prev_close_ratio",
+    )
+    mapping = pd.concat(
+        [
+            get_roll_map(adapter, product, "2020-01-15", OI_DATE)
+            for product in products
+        ],
+        ignore_index=True,
+    )
+    universe = get_research_universe(adapter, OI_DATE)
+    diagnostics = calculate_oi_confirmed_trend(prices, mapping, lookback=20)
+    factors = compute_oi_confirmed_trend_factor(
+        prices,
+        mapping,
+        universe,
+        lookback=20,
+        signal_scale=0.02,
+    )
+
+    date = pd.Timestamp(OI_DATE)
+    rb_prices = prices.loc[prices["underlying_symbol"].eq("RB")].sort_values(
+        "trading_date"
+    )
+    rb_prices = rb_prices.loc[rb_prices["trading_date"].le(date)]
+    expected = (
+        rb_prices.iloc[-1]["close"] / rb_prices.iloc[-21]["close"] - 1.0
+    ) * max(
+        rb_prices.iloc[-1]["open_interest"]
+        / rb_prices.iloc[-21]["open_interest"]
+        - 1.0,
+        0.0,
+    )
+    exact_diagnostics = diagnostics.loc[
+        diagnostics["trading_date"].eq(date)
+    ].set_index("instrument")
+    exact_factors = factors.loc[factors["trading_date"].eq(date)].set_index(
+        "instrument"
+    )
+
+    assert tuple(factors.columns) == FACTOR_COLUMNS
+    assert exact_diagnostics.loc["RB", "raw_factor"] == pytest.approx(expected)
+    assert exact_factors.loc["RB", "raw_factor"] == pytest.approx(expected)
+    for product in ("CU", "IF"):
+        assert bool(exact_diagnostics.loc[product, "roll_in_window"])
+        assert pd.isna(exact_factors.loc[product, "raw_factor"])

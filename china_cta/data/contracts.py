@@ -351,6 +351,7 @@ def get_signal_continuous_price(
     The output is unsuitable for cash P&L, account valuation or settlement.
     """
 
+    # 连续价用于消除主力换月的机械跳点，只能进入 Signal/Research，不能作为可成交现金价格。
     frame = adapter.get_dominant_price(
         underlying_symbols,
         start_date,

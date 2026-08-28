@@ -13,6 +13,7 @@ __pycache__/
 # Local market data, RQAlpha bundles/results, and environment backups
 /data/
 /results/
+/output/
 /migration_backups/
 *.parquet
 *.feather
@@ -38,3 +39,7 @@ secrets*.yaml
 secrets*.yml
 .rqdata/
 .rqalpha-plus/
+
+# 已生成的旧版教学成品仅在本机保留；后续正式手册放在 docs/ 管理。
+/CTA_Alpha_Research_Framework_使用教学_backtest-v1.0.1.pdf
+/CTA_三因子Demo端到端报告_backtest-v1.0.1.pdf

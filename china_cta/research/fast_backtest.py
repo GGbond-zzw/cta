@@ -113,6 +113,7 @@ def run_fast_research_backtest(
     detail["turnover_proxy"] = (
         detail["research_exposure"] - previous_exposure.fillna(0.0)
     ).abs().where(detail["research_exposure"].notna())
+    # 收盘后 signal(t) 只解释显式 lag 之后的 forward return，绝不乘同一收盘收益。
     detail["gross_signal_return"] = (
         detail["research_exposure"] * detail["research_forward_return"]
     )
@@ -456,6 +457,7 @@ def _build_return_alignment(
 ) -> pd.DataFrame:
     grouped = prices.groupby("instrument", sort=False)
     alignment = prices.loc[:, ["signal_date", "instrument"]].copy()
+    # lag=1 时：t 日收盘后出信号，t+1 是研究收益起点，t+2 是实现日。
     alignment["return_start"] = grouped["signal_date"].shift(-execution_lag)
     alignment["return_end"] = grouped["signal_date"].shift(-(execution_lag + 1))
     start_price = grouped[price_field].shift(-execution_lag)

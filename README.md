@@ -10,6 +10,7 @@ Ricequant 负责行情与合约数据，以及正式回测中的订单、撮合�
 
 ## 当前状态
 
+- 当前增量冻结版本：`backtest-v1.1.0`。它以 `backtest-v1.0.1` 为核心基线，新增 OI-confirmed Trend、三因子教学脚本和关键中文业务注释；不改变 Phase 1–7 的数据、Portfolio、Formal 或 Golden 接口。
 - Phase 0 已完成：Python 3.11 独立 Conda 环境、RQData 连通性，以及 RQAlpha Plus 单合约一手期货冒烟回测均已验证。
 - M1 架构清理已完成：旧的 Contract Master 快照、Contract Selector、Parquet 存储和相关脚本/测试已从源码中移除。
 - Phase 1 已完成：六个最小 RQData 查询接口、标准 DataFrame schema 和本地 Parquet cache 已验证。
@@ -33,6 +34,7 @@ china_cta/
     schema.py       # 统一 factor table 与极简 signal scaling
     trend.py        # 60 交易期连续价 Trend baseline
     carry.py        # 真实 near/main 合约 Carry baseline
+    oi_confirmed_trend.py  # 价格趋势 × 正向 OI 变化的教学研究因子
   research/
     fast_backtest.py  # 向量化 signal/forward-return 对齐与研究诊断
   portfolio/
@@ -45,6 +47,7 @@ china_cta/
 scripts/
   check_rqdata.py
   smoke_rqalpha_futures.py
+  walkthrough_three_factor_pipeline.py  # Trend/Carry/OI → Portfolio → 一个月 Formal 教学链路
 tests/
 config/
 ```
@@ -104,7 +107,7 @@ roll_map:
 
 ## Phase 3 因子语义
 
-Trend 与 Carry 的内部输入不同，但都输出同一个最小表：
+原 Phase 3 baseline Trend/Carry 与后续教学因子 OI-confirmed Trend 的内部输入不同，但都输出同一个最小表：
 
 ```text
 trading_date, instrument, factor_name, raw_factor, signal
@@ -148,6 +151,19 @@ raw_factor = (near_settlement / main_settlement - 1)
 ```
 
 正值表示近月相对主力远月更贵，对应 backwardation/long bias。若没有唯一主力、没有合格 near、到期日差异常、价格缺失或价格非正，则保留 `NA`；不外推、不拟合 curve，也不使用连续价格。该定义与 RQData 商品期货 `get_roll_yield(type="near_main", rule=0)` 的年化口径做真实数据交叉验证；股指期货不强行套用此商品 Carry baseline。
+
+### OI-confirmed Trend 教学因子
+
+`oi_confirmed_trend_20d` 使用 ratio-adjusted 主力连续收盘价和主力连续 OI：
+
+```text
+price_return = close(t) / close(t-20) - 1
+oi_change = OI(t) / OI(t-20) - 1
+raw_factor = price_return * max(oi_change, 0)
+signal = clip(raw_factor / 0.02, -1, 1)
+```
+
+OI 只确认趋势强度：持仓下降把确认降为 0，不反转价格方向。若 20 日窗口内 RQData rule-0/rank-1 主力发生切换，因子返回 `NA`，避免把合约迁移造成的 OI 跳变误认为资金流。该因子用于展示新 Alpha 如何复用五列接口和同一 Portfolio/Formal 链路，不改变原 Trend/Carry baseline。
 
 ### 可用时点
 
@@ -508,4 +524,4 @@ $env:RUN_RQDATA_INTEGRATION = "1"
 
 ## 当前停止边界
 
-Phase 7 到此为止。v1 的 Golden reconciliation、look-ahead checklist 和固定 regression baseline 已建立；`backtest-v1` 已完成 final Git freeze，没有开始任何后续开发。
+Phase 7 到此为止。v1 的 Golden reconciliation、look-ahead checklist 和固定 regression baseline 已建立；`backtest-v1.1.0` 只增加研究因子、教学脚本与中文注释，没有开始 Phase 8+ 或改变既有回测架构。

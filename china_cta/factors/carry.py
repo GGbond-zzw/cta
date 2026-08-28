@@ -74,6 +74,7 @@ def calculate_near_main_carry(contract_snapshots: pd.DataFrame) -> pd.DataFrame:
         ["trading_date", "underlying_symbol"], sort=True, dropna=False
     )
     for (trading_date, instrument), curve in grouped:
+        # Carry 必须来自当时真实存在的月份合约；主力是 far，主力前最早未到期合约是 near。
         main_rows = curve.loc[curve["dominant_rank"].eq(1)]
         main = main_rows.iloc[0] if len(main_rows) == 1 else None
         near = None

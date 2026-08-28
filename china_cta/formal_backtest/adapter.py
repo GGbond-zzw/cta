@@ -146,6 +146,7 @@ def run_formal_backtest(
         target_date = pd.Timestamp(context.now).normalize()
         if target_date not in schedule or target_date in state["processed_dates"]:
             return
+        # 当前日 bar 只触发执行预生成目标；adapter 不用当日行情重算 Alpha、合约或手数。
         _submit_target_snapshot(target_date, schedule[target_date], state)
         state["processed_dates"].add(target_date)
 
@@ -395,6 +396,7 @@ def _submit_target_snapshot(
             quantity, source_tag = desired[contract]
             implicit_zero = False
         else:
+            # 有完整快照但合约缺席（包括空快照）表示目标归零；无 rebalance 日期则不会进入本函数。
             quantity = 0
             source_tag = "implicit_zero_from_complete_snapshot"
             implicit_zero = True

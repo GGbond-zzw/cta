@@ -167,6 +167,7 @@ def reconcile_close_based_mtm(
         contract_daily["accounting_price"]
         - contract_daily["previous_accounting_price"]
     )
+    # 只复算透明的价格变动分量用于 Golden 对账，不复制 RQAlpha 账户或保证金引擎。
     contract_daily["manual_gross_pnl_component"] = 0.0
     contract_daily.loc[needs_price, "manual_gross_pnl_component"] = (
         contract_daily.loc[needs_price, "previous_position"]

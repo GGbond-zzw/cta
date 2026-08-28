@@ -70,6 +70,7 @@ def make_factor_table(
         validate="one_to_one",
     )
     result["factor_name"] = factor_name
+    # 这里只把可解释的原始量映射为统一预测强度；signal 不是仓位、手数或资金比例。
     result["signal"] = (result["raw_factor"] / signal_scale).clip(-1.0, 1.0)
     result = (
         result.loc[:, FACTOR_COLUMNS]

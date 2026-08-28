@@ -49,6 +49,7 @@ def compute_trend_factor(
         raise ValueError("continuous_prices contains duplicate date/instrument rows")
     prices = prices.sort_values(["instrument", "trading_date"]).reset_index(drop=True)
 
+    # 要求窗口内每个交易期都有有效价格，避免通过隐式填充制造趋势信号。
     valid_price = prices[price_field].where(prices[price_field].gt(0))
     base_price = valid_price.groupby(prices["instrument"], sort=False).shift(
         lookback

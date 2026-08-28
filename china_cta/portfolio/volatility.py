@@ -92,6 +92,7 @@ def compute_rolling_volatility(
 
     result = prices.loc[:, ["trading_date", "instrument"]].copy()
     result["raw_volatility"] = raw.astype("float64")
+    # vol floor 只限制“有效但过小”的正波动率；缺失/零波动不会被伪造成可配置风险。
     result["vol_forecast"] = result["raw_volatility"].clip(
         lower=float(volatility_floor)
     )

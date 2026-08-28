@@ -230,6 +230,7 @@ def prepare_portfolio_market_data(
             "market_data_reason": "available",
         }
         try:
+            # 合约按目标生效日 t+1 选择，但 sizing price 只使用信号日 t 已知的真实合约结算价。
             contract = get_dominant_contract(
                 adapter,
                 pair.instrument,
@@ -354,6 +355,7 @@ def construct_target_positions(
     contributions["strategy_weight"] = contributions["factor_name"].map(
         dict(config.strategy_weights)
     )
+    # Phase 3 signal 在这里被直接消费，不做第二次 clipping/rank/z-score。
     contributions["weighted_signal_contribution"] = (
         contributions["signal"] * contributions["strategy_weight"]
     )
@@ -370,6 +372,7 @@ def construct_target_positions(
 
     keys = ["signal_date", "instrument"]
     grouped = contributions.groupby(keys, sort=True, dropna=False)
+    # 缺失策略不重分其权重，避免数据缺失时悄悄放大其余 Alpha。
     diagnostics = grouped[
         ["weighted_signal_contribution", "strategy_risk_contribution"]
     ].sum(min_count=1)
@@ -463,6 +466,7 @@ def construct_target_positions(
         prefix="chain",
     )
 
+    # v1 使用透明的 diagonal risk：忽略品种协方差，再按组合目标波动率整体缩放。
     diagonal_variance = (
         diagnostics["post_chain_cap"] * diagnostics["vol_forecast"]
     ).pow(2)
@@ -484,6 +488,7 @@ def construct_target_positions(
         diagnostics["estimated_portfolio_risk_pre"]
         * diagnostics["portfolio_scale_factor"]
     )
+    # 下面保持完整单位链：风险敞口 -> 名义资金 -> 合约名义价值 -> 整数手数。
     diagnostics["target_notional"] = (
         config.initial_capital * diagnostics["post_scale_exposure"]
     )
@@ -568,6 +573,7 @@ def construct_target_positions(
             "Target positions contain duplicate date/contract rows"
         )
 
+    # rebalance_dates 记录“完整快照存在”的日期，即使所有目标都 unavailable 而产生 0 行。
     rebalance_dates = pd.DatetimeIndex(
         market.loc[
             market["signal_date"].isin(requested_signal_dates),
