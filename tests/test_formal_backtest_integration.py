@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from china_cta.formal_backtest import FormalBacktestConfig, run_formal_backtest
+from china_cta.runtime_paths import get_rqalpha_bundle_path
 
 
 pytestmark = [
@@ -19,7 +20,7 @@ pytestmark = [
 ]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BUNDLE_PATH = PROJECT_ROOT / "data" / "rqalpha_bundle_futures_smoke" / "bundle"
+BUNDLE_PATH = get_rqalpha_bundle_path()
 CONTRACT = "AG1612"
 
 

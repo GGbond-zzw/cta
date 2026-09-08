@@ -23,6 +23,7 @@ from china_cta.portfolio import (
     load_product_classification,
     prepare_portfolio_market_data,
 )
+from china_cta.runtime_paths import get_rqalpha_bundle_path
 from china_cta.validation import reconcile_close_based_mtm
 
 
@@ -36,7 +37,7 @@ pytestmark = [
 ]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BUNDLE_PATH = PROJECT_ROOT / "data" / "rqalpha_bundle_futures_smoke" / "bundle"
+BUNDLE_PATH = get_rqalpha_bundle_path()
 GOLDEN_SPEC_PATH = PROJECT_ROOT / "config" / "golden_backtest_v1.json"
 DATE_ROLE = "target_effective_date_earliest_execution_trading_date"
 

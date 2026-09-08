@@ -9,9 +9,11 @@ import pandas as pd
 from rqalpha.apis import order_to, update_universe
 from rqalpha_plus import run_func
 
+from china_cta.runtime_paths import get_rqalpha_bundle_path
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BUNDLE_PATH = PROJECT_ROOT / "data" / "rqalpha_bundle_futures_smoke" / "bundle"
+BUNDLE_PATH = get_rqalpha_bundle_path()
 OUTPUT_ROOT = PROJECT_ROOT / "data" / "rqalpha_smoke"
 RESULT_PATH = OUTPUT_ROOT / "result.pkl"
 REPORT_PATH = OUTPUT_ROOT / "report"

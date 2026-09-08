@@ -143,6 +143,8 @@ def load_product_classification(
     """Load a small, versioned, non-secret product risk classification."""
 
     source = Path(path)
+    if not source.is_absolute() and not source.exists():
+        source = Path(__file__).resolve().parents[2] / source
     payload = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("products"), dict):
         raise ValueError("classification config must contain a products mapping")

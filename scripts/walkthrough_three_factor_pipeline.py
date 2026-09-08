@@ -42,9 +42,10 @@ from china_cta.portfolio import (
     prepare_portfolio_market_data,
 )
 from china_cta.research import run_fast_research_backtest
+from china_cta.runtime_paths import get_rqalpha_bundle_path
 
 
-BUNDLE_PATH = PROJECT_ROOT / "data" / "rqalpha_bundle_futures_smoke" / "bundle"
+BUNDLE_PATH = get_rqalpha_bundle_path()
 PRODUCTS = ("RB", "CU", "IF")
 COMMODITIES = ("RB", "CU")
 SIGNAL_START = pd.Timestamp("2020-04-27")

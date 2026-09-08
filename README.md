@@ -426,10 +426,11 @@ expected values。
 
 ## 环境
 
-项目解释器固定为：
+项目解释器固定为 Conda 的 `cta` 环境。以下 PowerShell 路径适用于默认安装在
+`%USERPROFILE%\miniconda3` 的 Miniconda，不包含具体用户名：
 
 ```text
-C:\Users\Dayuan Shen\.conda\envs\cta\python.exe
+$env:USERPROFILE\miniconda3\envs\cta\python.exe
 ```
 
 VS Code 的项目级 `.vscode/settings.json` 已选择该解释器。不需要修改全局 PATH；即使 PowerShell 的执行策略阻止 `conda-hook.ps1`，也可直接使用解释器完整路径。
@@ -437,16 +438,27 @@ VS Code 的项目级 `.vscode/settings.json` 已选择该解释器。不需要�
 基础环境可由 `environment.yml` 重建：
 
 ```powershell
-& "D:\software\anaconda\Scripts\conda.exe" env create -f environment.yml
+& "$env:USERPROFILE\miniconda3\Scripts\conda.exe" env create -f environment.yml
 ```
 
 `RQAlpha Plus` 和 `RQFactor` 是许可证组件，不写入公共 pip 依赖列表。获得许可证并设置本机环境变量后，在 `cta` 环境内通过 RQSDK 安装：
 
 ```powershell
-& "C:\Users\Dayuan Shen\.conda\envs\cta\Scripts\rqsdk.exe" license
-& "C:\Users\Dayuan Shen\.conda\envs\cta\Scripts\rqsdk.exe" install rqalpha_plus
-& "C:\Users\Dayuan Shen\.conda\envs\cta\Scripts\rqsdk.exe" install rqfactor
+& "$env:USERPROFILE\miniconda3\envs\cta\Scripts\rqsdk.exe" license
+& "$env:USERPROFILE\miniconda3\envs\cta\Scripts\rqsdk.exe" install rqalpha_plus
+& "$env:USERPROFILE\miniconda3\envs\cta\Scripts\rqsdk.exe" install rqfactor
 ```
+
+正式回测脚本和集成测试默认读取项目内的
+`data/rqalpha_bundle_futures_smoke/bundle`。如果 bundle 位于其他本机目录，使用
+`CTA_RQALPHA_BUNDLE_PATH` 指向 **bundle 目录本身**，不要把个人绝对路径写入源码：
+
+```powershell
+$env:CTA_RQALPHA_BUNDLE_PATH = "C:\path\to\.rqalpha\bundle"
+```
+
+`scripts/smoke_rqalpha_futures.py`、`scripts/walkthrough_three_factor_pipeline.py`
+以及 Formal/Golden 集成测试都会读取该变量。
 
 许可证和 RQData 配置只保存在本机环境变量中，不得写入源码、YAML、日志或 Git。
 
@@ -455,59 +467,59 @@ VS Code 的项目级 `.vscode/settings.json` 已选择该解释器。不需要�
 以下命令均可直接粘贴到 VS Code 的 PowerShell Terminal：
 
 ```powershell
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" check_environment.py
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest -q
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" scripts\check_rqdata.py
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" scripts\smoke_rqalpha_futures.py
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" check_environment.py
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" -m pytest -q
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" scripts\check_rqdata.py
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" scripts\smoke_rqalpha_futures.py
 ```
 
 默认 pytest 不访问网络。需要用有效许可证执行 Phase 1 的 RB/CU/IF 与夜盘真实数据验收时：
 
 ```powershell
 $env:RUN_RQDATA_INTEGRATION = "1"
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_rqdata_phase1_integration.py -q
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" -m pytest tests\test_rqdata_phase1_integration.py -q
 ```
 
 Phase 2 的历史 universe、RB/CU/IF/AG curve、dominant/roll 与连续价验收：
 
 ```powershell
 $env:RUN_RQDATA_INTEGRATION = "1"
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_contracts_integration.py -q
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" -m pytest tests\test_contracts_integration.py -q
 ```
 
 Phase 3 的 RB/CU/IF 60 日 Trend、RB/CU Carry、手工公式和 RQData 官方 `near_main` 基准验收：
 
 ```powershell
 $env:RUN_RQDATA_INTEGRATION = "1"
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_factors_integration.py -q
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" -m pytest tests\test_factors_integration.py -q
 ```
 
 Phase 4 的 execution lag、RB/CU/IF Trend、RB/CU Carry、连续价 PIT reconciliation 和 40/60/80 parameter surface 验收：
 
 ```powershell
 $env:RUN_RQDATA_INTEGRATION = "1"
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_fast_backtest_integration.py -q
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" -m pytest tests\test_fast_backtest_integration.py -q
 ```
 
 Phase 5 的 RB/CU/IF volatility、Trend/Carry 聚合、下一交易日 Trade Contract、历史 margin、整数手数与未来数据扰动验收：
 
 ```powershell
 $env:RUN_RQDATA_INTEGRATION = "1"
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_portfolio_integration.py -q
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" -m pytest tests\test_portfolio_integration.py -q
 ```
 
 Phase 6 的日频 Target schedule、long/flat/short/flat、历史期货参数、原生结果与重复运行验收：
 
 ```powershell
 $env:RUN_RQALPHA_INTEGRATION = "1"
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_formal_backtest_integration.py -q
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" -m pytest tests\test_formal_backtest_integration.py -q
 ```
 
 Phase 7 的 Golden A–F、逐日 MTM 对账和冻结回归（只需要 RQAlpha license）：
 
 ```powershell
 $env:RUN_RQALPHA_INTEGRATION = "1"
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_golden_reconciliation_integration.py -q
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" -m pytest tests\test_golden_reconciliation_integration.py -q
 ```
 
 同一文件中的 Trend+Carry → Portfolio → Formal 小型全链路测试还需要开启 RQData integration：
@@ -515,7 +527,7 @@ $env:RUN_RQALPHA_INTEGRATION = "1"
 ```powershell
 $env:RUN_RQALPHA_INTEGRATION = "1"
 $env:RUN_RQDATA_INTEGRATION = "1"
-& "C:\Users\Dayuan Shen\.conda\envs\cta\python.exe" -m pytest tests\test_golden_reconciliation_integration.py -q
+& "$env:USERPROFILE\miniconda3\envs\cta\python.exe" -m pytest tests\test_golden_reconciliation_integration.py -q
 ```
 
 `check_rqdata.py` 会读取最近一个已完成交易日的 RB 主力合约日线。`smoke_rqalpha_futures.py` 使用本机 `data/rqalpha_bundle_futures_smoke/` 中已验证的期货 bundle，对 `AG1612` 做一手日频正式回测，并检查成交与 NAV 输出。
