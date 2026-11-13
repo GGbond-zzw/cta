@@ -207,3 +207,9 @@ def _validate_research_prices(continuous_prices: pd.DataFrame) -> None:
         raise ValueError(
             "OI-confirmed Trend requires pre-adjusted prev_close_ratio prices"
         )
+
+
+def build(inputs: dict) -> pd.DataFrame:
+    return compute_oi_confirmed_trend_factor(
+        inputs["continuous_prices"], inputs["universe"]
+    )

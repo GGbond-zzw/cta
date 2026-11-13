@@ -77,3 +77,7 @@ def compute_trend_factor(
         }
     )
     return result
+
+
+def build(inputs: dict) -> pd.DataFrame:
+    return compute_trend_factor(inputs["continuous_prices"], inputs["universe"])

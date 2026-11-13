@@ -1,19 +1,19 @@
-"""RQAlpha Plus integration for formal trading simulation."""
+"""Native-account backtest layer (RQAlpha futures account, integer lots)."""
 
-from china_cta.formal_backtest.adapter import (
-    ORDER_COLUMNS,
-    TARGET_EXECUTION_COLUMNS,
-    TARGET_POSITION_COLUMNS,
-    FormalBacktestConfig,
-    run_formal_backtest,
+from __future__ import annotations
+
+from china_cta.formal_backtest.native_account import (  # noqa: F401
+    NativeAccountConfig,
+    build_target_quantities,
+    combine_sleeves,
+    load_market,
+    run_native_account,
 )
-from china_cta.formal_backtest.results import load_formal_result
 
 __all__ = [
-    "ORDER_COLUMNS",
-    "TARGET_EXECUTION_COLUMNS",
-    "TARGET_POSITION_COLUMNS",
-    "FormalBacktestConfig",
-    "load_formal_result",
-    "run_formal_backtest",
+    "NativeAccountConfig",
+    "build_target_quantities",
+    "combine_sleeves",
+    "load_market",
+    "run_native_account",
 ]

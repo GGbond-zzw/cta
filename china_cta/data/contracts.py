@@ -176,7 +176,7 @@ def get_contract_snapshot(
     underlying_symbol: str,
     trading_date: DateLike,
     *,
-    price_field: Literal["close", "settlement"] = "settlement",
+    price_field: Literal["close", "settlement"] = "close",
 ) -> pd.DataFrame:
     """Return all real contracts RQData says were tradable on the date.
 
@@ -254,7 +254,7 @@ def get_curve_snapshot(
     underlying_symbol: str,
     trading_date: DateLike,
     *,
-    price_field: Literal["close", "settlement"] = "settlement",
+    price_field: Literal["close", "settlement"] = "close",
 ) -> pd.DataFrame:
     """Return the price-bearing real-contract curve sorted by maturity."""
 

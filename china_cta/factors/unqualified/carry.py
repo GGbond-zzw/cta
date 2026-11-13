@@ -66,8 +66,8 @@ def calculate_near_main_carry(contract_snapshots: pd.DataFrame) -> pd.DataFrame:
         ["trading_date", "underlying_symbol", "order_book_id"]
     ).any():
         raise ValueError("contract_snapshots contains duplicate contract rows")
-    if snapshots["price_field"].dropna().ne("settlement").any():
-        raise ValueError("Carry baseline requires settlement prices")
+    if snapshots["price_field"].isna().any() or snapshots["price_field"].ne("close").any():
+        raise ValueError("Carry baseline requires close prices")
 
     rows: list[dict[str, object]] = []
     grouped = snapshots.groupby(
@@ -148,9 +148,15 @@ def compute_carry_factor(
     )
     result.attrs.update(
         {
-            "definition": "(near_settlement / main_settlement - 1) * 365 / maturity_gap_days",
+            "definition": "(near_close / main_close - 1) * 365 / maturity_gap_days",
             "contract_selection": "earliest_non_expired_contract_before_rule0_rank1_main",
-            "price_field": "settlement",
+            "price_field": "close",
         }
     )
     return result
+
+
+def build(inputs: dict) -> pd.DataFrame:
+    return compute_carry_factor(
+        inputs["contract_snapshots"], inputs["universe"]
+    )

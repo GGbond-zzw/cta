@@ -8,6 +8,15 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+# This module exercises the legacy RQAlpha Plus adapter. Its native modules are
+# blocked on some Windows hosts by the code-integrity policy, so skip instead of
+# failing collection there; the native result layer is covered by
+# tests/test_native_account.py and does not need rqalpha_plus.
+pytest.importorskip(
+    "rqalpha_plus",
+    reason="legacy RQAlpha Plus adapter is unavailable on this host",
+)
+
 from china_cta.formal_backtest import adapter
 from china_cta.formal_backtest.adapter import (
     ORDER_COLUMNS,

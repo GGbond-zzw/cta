@@ -7,6 +7,7 @@ import itertools
 import json
 import math
 import re
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
@@ -52,8 +53,10 @@ METRIC_COLUMNS: Final[tuple[str, ...]] = (
     "mean_long_short_return",
 )
 
+EXECUTION_PRICE_FIELDS: Final[tuple[str, ...]] = ("open", "close")
+DEFAULT_EXECUTION_PRICE_FIELD: Final[str] = "open"
 RESEARCH_RETURN_DEFINITION: Final[str] = (
-    "ratio_adjusted_dominant_close_to_close_after_execution_lag"
+    "ratio_adjusted_dominant_next_open_to_next_open_after_close_signal"
 )
 SECTOR_DEFERRED_REASON: Final[str] = (
     "reliable point-in-time sector metadata is not part of the stable data contract"
@@ -69,18 +72,33 @@ def run_fast_research_backtest(
     cost_rate: float = 0.0,
     annualization_factor: int = 252,
     price_field: str = "close",
+    execution_price_field: str = DEFAULT_EXECUTION_PRICE_FIELD,
+    include_breakdowns: bool = True,
 ) -> dict[str, Any]:
     """Align Phase 3 signals with future research returns and summarize them.
 
-    ``execution_lag=1`` means a signal observed after close on date t first
-    starts a close-to-close research return at the next price observation.
-    This intentionally does not assume execution at close(t).
+    A signal is only known after the close of date t, so the earliest
+    realistic fill is the open of date t+1.  With ``execution_lag=1`` the
+    research return therefore runs from ``open(t+1)`` to ``open(t+2)``.
+    ``execution_price_field`` picks the entry/exit price ("open" by default,
+    "close" for the legacy close-to-close convention); ``price_field`` only
+    documents which price the factor signal itself was built from.
+
+    The year and instrument breakdowns are the expensive part of this call.
+    Callers that only consume ``overall`` pass ``include_breakdowns=False``
+    and receive empty placeholder frames with the usual columns.
     """
 
     _validate_run_settings(execution_lag, cost_rate, annualization_factor)
+    if execution_price_field not in EXECUTION_PRICE_FIELDS:
+        raise ValueError(
+            f"execution_price_field must be one of {EXECUTION_PRICE_FIELDS}"
+        )
     factors = _normalize_factors(factor_table)
     eligible = _normalize_universe(universe)
-    prices = _normalize_research_prices(research_prices, price_field)
+    prices = _normalize_research_prices(
+        research_prices, price_field, execution_price_field
+    )
 
     factor_names = factors["factor_name"].dropna().unique()
     if len(factor_names) != 1:
@@ -96,7 +114,7 @@ def run_fast_research_backtest(
     alignment = _build_return_alignment(
         prices,
         execution_lag=execution_lag,
-        price_field=price_field,
+        execution_price_field=execution_price_field,
     )
     detail = pit_factors.merge(
         alignment,
@@ -129,6 +147,7 @@ def run_fast_research_backtest(
             "cash_pnl_allowed": False,
             "signal_is_position": False,
             "execution_lag": execution_lag,
+            "execution_price_field": execution_price_field,
             "research_return_definition": RESEARCH_RETURN_DEFINITION,
             "return_horizon_price_periods": 1,
             "turnover_proxy_definition": "abs(exposure_t - exposure_t_minus_1)",
@@ -139,8 +158,12 @@ def run_fast_research_backtest(
     overall = pd.DataFrame(
         [_metric_row(detail, annualization_factor)], columns=METRIC_COLUMNS
     )
-    by_year = _year_breakdown(detail, annualization_factor)
-    by_instrument = _instrument_breakdown(detail, annualization_factor)
+    if include_breakdowns:
+        by_year = _year_breakdown(detail, annualization_factor)
+        by_instrument = _instrument_breakdown(detail, annualization_factor)
+    else:
+        by_year = pd.DataFrame(columns=("year", *METRIC_COLUMNS))
+        by_instrument = pd.DataFrame(columns=("instrument", *METRIC_COLUMNS))
     metadata = {
         "factor_name": factor_name,
         "factor_parameters": {},
@@ -153,6 +176,7 @@ def run_fast_research_backtest(
         "research_only": True,
         "cash_pnl_allowed": False,
         "price_field": price_field,
+        "execution_price_field": execution_price_field,
         "adjust_type": research_prices.attrs.get("adjust_type"),
         "adjust_method": research_prices.attrs.get("adjust_method"),
         "cost_rate": float(cost_rate),
@@ -187,6 +211,7 @@ def run_parameter_surface(
     cost_rate: float = 0.0,
     annualization_factor: int = 252,
     price_field: str = "close",
+    execution_price_field: str = DEFAULT_EXECUTION_PRICE_FIELD,
 ) -> dict[str, pd.DataFrame]:
     """Run an explicit parameter grid without ranking or selecting a winner."""
 
@@ -220,6 +245,7 @@ def run_parameter_surface(
             cost_rate=cost_rate,
             annualization_factor=annualization_factor,
             price_field=price_field,
+            execution_price_field=execution_price_field,
         )
         parameter_set = json.dumps(
             _jsonable(parameters),
@@ -251,6 +277,7 @@ def save_research_run(
     parameter_grid: Mapping[str, Sequence[Any]] | None = None,
     parameter_surface: Mapping[str, pd.DataFrame] | None = None,
     output_root: str | Path = "results",
+    overwrite: bool = False,
 ) -> dict[str, Path]:
     """Persist one deterministic config and small CSV summaries locally."""
 
@@ -276,6 +303,7 @@ def save_research_run(
         "research_only": True,
         "cash_pnl_allowed": False,
         "price_field": metadata["price_field"],
+        "execution_price_field": metadata.get("execution_price_field"),
         "adjust_type": metadata["adjust_type"],
         "adjust_method": metadata["adjust_method"],
         "date_range": {
@@ -311,28 +339,33 @@ def save_research_run(
             )
 
     output_dir = Path(output_root) / run_name
-    output_dir.mkdir(parents=True, exist_ok=False)
-
+    if output_dir.exists() and not overwrite:
+        raise FileExistsError(f"Result already exists: {output_dir}")
     paths = {
         "config": output_dir / "config.json",
         "overall": output_dir / "overall.csv",
         "by_year": output_dir / "by_year.csv",
         "by_instrument": output_dir / "by_instrument.csv",
     }
-    paths["config"].write_text(
-        json.dumps(config, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    for name in ("overall", "by_year", "by_instrument"):
-        result[name].to_csv(paths[name], index=False, float_format="%.17g")
-
+    # Serialize all outputs before replacing any existing result. Only the
+    # known files from this run are touched; unrelated files remain intact.
+    payloads = {
+        "config": json.dumps(config, ensure_ascii=False, indent=2, sort_keys=True),
+        **{name: result[name].to_csv(index=False, float_format="%.17g")
+           for name in ("overall", "by_year", "by_instrument")},
+    }
     if parameter_surface is not None:
         for name in ("overall", "by_year", "by_instrument"):
             path = output_dir / f"parameter_surface_{name}.csv"
-            parameter_surface[name].to_csv(
-                path, index=False, float_format="%.17g"
-            )
             paths[f"parameter_surface_{name}"] = path
+            payloads[f"parameter_surface_{name}"] = parameter_surface[name].to_csv(
+                index=False, float_format="%.17g")
+    output_dir.mkdir(parents=True, exist_ok=overwrite)
+    with tempfile.TemporaryDirectory(prefix=".research_stage_", dir=output_dir.parent) as stage:
+        for name, payload in payloads.items():
+            (Path(stage) / paths[name].name).write_text(payload, encoding="utf-8")
+        for name in [key for key in paths if key != "config"] + ["config"]:
+            (Path(stage) / paths[name].name).replace(paths[name])
     return paths
 
 
@@ -411,6 +444,7 @@ def _normalize_universe(frame: pd.DataFrame) -> pd.DataFrame:
 def _normalize_research_prices(
     frame: pd.DataFrame,
     price_field: str,
+    execution_price_field: str,
 ) -> pd.DataFrame:
     if frame.attrs.get("usage") != "signal_research_only":
         raise ValueError("research_prices must be marked signal_research_only")
@@ -422,7 +456,8 @@ def _normalize_research_prices(
         raise ValueError(
             "research_prices require pre-adjusted prev_close_ratio prices"
         )
-    required = ("trading_date", "underlying_symbol", price_field)
+    ranges = tuple(dict.fromkeys((price_field, execution_price_field)))
+    required = ("trading_date", "underlying_symbol", *ranges)
     missing = sorted(set(required) - set(frame.columns))
     if missing:
         raise ValueError(f"research_prices is missing fields: {missing}")
@@ -438,10 +473,11 @@ def _normalize_research_prices(
     prices["instrument"] = (
         prices["instrument"].astype("string").str.strip().str.upper()
     )
-    prices[price_field] = pd.to_numeric(prices[price_field], errors="coerce")
-    prices[price_field] = prices[price_field].where(
-        np.isfinite(prices[price_field]) & prices[price_field].gt(0)
-    )
+    for column in ranges:
+        prices[column] = pd.to_numeric(prices[column], errors="coerce")
+        prices[column] = prices[column].where(
+            np.isfinite(prices[column]) & prices[column].gt(0)
+        )
     if prices.duplicated(["signal_date", "instrument"]).any():
         raise ValueError("research_prices contains duplicate date/instrument rows")
     return prices.sort_values(["instrument", "signal_date"]).reset_index(
@@ -453,15 +489,15 @@ def _build_return_alignment(
     prices: pd.DataFrame,
     *,
     execution_lag: int,
-    price_field: str,
+    execution_price_field: str,
 ) -> pd.DataFrame:
     grouped = prices.groupby("instrument", sort=False)
     alignment = prices.loc[:, ["signal_date", "instrument"]].copy()
-    # lag=1 时：t 日收盘后出信号，t+1 是研究收益起点，t+2 是实现日。
+    # lag=1 时：t 日收盘后出信号，t+1 开盘建仓，t+2 开盘换仓（开盘到开盘）。
     alignment["return_start"] = grouped["signal_date"].shift(-execution_lag)
     alignment["return_end"] = grouped["signal_date"].shift(-(execution_lag + 1))
-    start_price = grouped[price_field].shift(-execution_lag)
-    end_price = grouped[price_field].shift(-(execution_lag + 1))
+    start_price = grouped[execution_price_field].shift(-execution_lag)
+    end_price = grouped[execution_price_field].shift(-(execution_lag + 1))
     alignment["realization_date"] = alignment["return_end"]
     alignment["research_forward_return"] = end_price / start_price - 1.0
     return alignment

@@ -8,15 +8,20 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+pytest.importorskip(
+    "rqalpha_plus",
+    reason="legacy RQAlpha Plus adapter is unavailable on this host",
+)
+
 from china_cta.data.contracts import (
     get_contract_snapshot,
     get_research_universe,
     get_signal_continuous_price,
 )
 from china_cta.data.rqdata_adapter import RQDataAdapter, RQDataConfig
-from china_cta.factors.carry import compute_carry_factor
-from china_cta.factors.trend import compute_trend_factor
-from china_cta.formal_backtest import FormalBacktestConfig, run_formal_backtest
+from china_cta.factors.unqualified.carry import compute_carry_factor
+from china_cta.factors.unqualified.trend import compute_trend_factor
+from china_cta.formal_backtest.adapter import FormalBacktestConfig, run_formal_backtest
 from china_cta.portfolio import (
     PortfolioConfig,
     construct_target_positions,
@@ -401,7 +406,7 @@ def test_trend_and_carry_share_factor_portfolio_formal_pipeline(
     curve = pd.concat(
         [
             get_contract_snapshot(
-                adapter, product, signal_date, price_field="settlement"
+                adapter, product, signal_date, price_field="close"
             )
             for product in commodities
         ],

@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from china_cta.factors.oi_confirmed_trend import (
+from china_cta.factors.unqualified.oi_confirmed_trend import (
     calculate_oi_confirmed_trend,
     compute_oi_confirmed_trend_factor,
 )

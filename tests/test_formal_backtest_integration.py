@@ -6,7 +6,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from china_cta.formal_backtest import FormalBacktestConfig, run_formal_backtest
+pytest.importorskip(
+    "rqalpha_plus",
+    reason="legacy RQAlpha Plus adapter is unavailable on this host",
+)
+
+from china_cta.formal_backtest.adapter import FormalBacktestConfig, run_formal_backtest
 from china_cta.runtime_paths import get_rqalpha_bundle_path
 
 

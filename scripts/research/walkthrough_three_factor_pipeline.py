@@ -25,15 +25,15 @@ from china_cta.data.contracts import (
     get_signal_continuous_price,
 )
 from china_cta.data.rqdata_adapter import RQDataAdapter
-from china_cta.factors.carry import (
+from china_cta.factors.unqualified.carry import (
     calculate_near_main_carry,
     compute_carry_factor,
 )
-from china_cta.factors.oi_confirmed_trend import (
+from china_cta.factors.unqualified.oi_confirmed_trend import (
     calculate_oi_confirmed_trend,
     compute_oi_confirmed_trend_factor,
 )
-from china_cta.factors.trend import compute_trend_factor
+from china_cta.factors.unqualified.trend import compute_trend_factor
 from china_cta.formal_backtest import FormalBacktestConfig, run_formal_backtest
 from china_cta.portfolio import (
     PortfolioConfig,
@@ -113,7 +113,7 @@ def main() -> int:
                     adapter,
                     product,
                     date,
-                    price_field="settlement",
+                    price_field="close",
                 )
             )
     curves = pd.concat(curve_rows, ignore_index=True)

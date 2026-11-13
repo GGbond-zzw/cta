@@ -12,16 +12,16 @@ from china_cta.data.contracts import (
     get_signal_continuous_price,
 )
 from china_cta.data.rqdata_adapter import RQDataAdapter, RQDataConfig
-from china_cta.factors.carry import (
+from china_cta.factors.unqualified.carry import (
     calculate_near_main_carry,
     compute_carry_factor,
 )
 from china_cta.factors.schema import FACTOR_COLUMNS
-from china_cta.factors.oi_confirmed_trend import (
+from china_cta.factors.unqualified.oi_confirmed_trend import (
     calculate_oi_confirmed_trend,
     compute_oi_confirmed_trend_factor,
 )
-from china_cta.factors.trend import compute_trend_factor
+from china_cta.factors.unqualified.trend import compute_trend_factor
 
 
 pytestmark = [
@@ -82,7 +82,7 @@ def test_rb_cu_carry_matches_manual_and_rqdata_benchmark(tmp_path) -> None:
     snapshots = pd.concat(
         [
             get_contract_snapshot(
-                adapter, product, CARRY_DATE, price_field="settlement"
+                adapter, product, CARRY_DATE, price_field="close"
             )
             for product in products
         ],

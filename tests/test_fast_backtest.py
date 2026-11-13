@@ -24,6 +24,7 @@ def research_prices(
             "trading_date": date,
             "underlying_symbol": instrument,
             "close": value,
+            "open": value,
         }
         for instrument, values in values_by_instrument.items()
         for date, value in zip(pd.to_datetime(dates), values, strict=True)
@@ -193,9 +194,9 @@ def test_future_price_perturbation_cannot_change_earlier_results() -> None:
     original_prices = research_prices(dates, {"RB": [100, 101, 102, 103, 104]})
     changed_prices = original_prices.copy()
     changed_prices.attrs = original_prices.attrs.copy()
-    changed_prices.loc[
-        changed_prices["trading_date"].eq(dates[-1]), "close"
-    ] = 1_000.0
+    last_date = changed_prices["trading_date"].eq(dates[-1])
+    changed_prices.loc[last_date, "close"] = 1_000.0
+    changed_prices.loc[last_date, "open"] = 1_000.0
 
     original = run_fast_research_backtest(
         factor_data,
@@ -371,6 +372,27 @@ def test_research_run_persists_config_and_small_summaries(tmp_path) -> None:
     assert not (paths["config"].parent / "detail.csv").exists()
 
 
+def test_overwrite_updates_results_and_serialization_failure_preserves_old(tmp_path) -> None:
+    _, factor_data, price_data, universe_data = multi_year_inputs()
+    result = run_fast_research_backtest(factor_data, price_data, universe_data, execution_lag=1)
+    kwargs = dict(factor_parameters={"lookback": 60},
+                  signal_normalization_parameters={"signal_scale": .2},
+                  universe_settings={"products": ["RB", "CU"]}, output_root=tmp_path)
+    paths = save_research_run(result, "overwrite-test", **kwargs)
+    old_config = paths["config"].read_bytes()
+    with pytest.raises(FileExistsError):
+        save_research_run(result, "overwrite-test", **kwargs)
+    invalid = dict(kwargs, factor_parameters={"invalid": object()})
+    with pytest.raises(TypeError):
+        save_research_run(result, "overwrite-test", overwrite=True, **invalid)
+    assert paths["config"].read_bytes() == old_config
+    (paths["config"].parent / "unrelated.txt").write_text("keep", encoding="utf-8")
+    kwargs["factor_parameters"] = {"lookback": 90}
+    save_research_run(result, "overwrite-test", overwrite=True, **kwargs)
+    assert json.loads(paths["config"].read_text(encoding="utf-8"))["factor_parameters"] == {"lookback": 90}
+    assert (paths["config"].parent / "unrelated.txt").read_text(encoding="utf-8") == "keep"
+
+
 def test_cash_pnl_or_non_ratio_prices_are_rejected() -> None:
     dates = pd.date_range("2020-01-02", periods=3, freq="B")
     price_data = research_prices(dates, {"RB": [100, 101, 102]})
@@ -382,4 +404,58 @@ def test_cash_pnl_or_non_ratio_prices_are_rejected() -> None:
             price_data,
             universe(dates[:1], ("RB",)),
             execution_lag=1,
+        )
+
+
+def test_execution_uses_the_next_open_by_default() -> None:
+    dates = pd.date_range("2020-01-02", periods=5, freq="B")
+    price_data = research_prices(
+        dates, {"RB": [100.0, 120.0, 126.0, 151.2, 166.32]}
+    )
+    price_data["open"] = [101.0, 121.0, 124.0, 150.0, 170.0]
+    factor_data = factors(dates[:3], {"RB": [0.5, -0.5, 1.0]})
+
+    result = run_fast_research_backtest(
+        factor_data,
+        price_data,
+        universe(dates[:3], ("RB",)),
+        execution_lag=1,
+    )
+
+    assert result["metadata"]["execution_price_field"] == "open"
+    assert result["detail"].loc[0, "research_forward_return"] == pytest.approx(
+        124.0 / 121.0 - 1.0
+    )
+    assert result["detail"].loc[0, "research_forward_return"] != pytest.approx(0.05)
+
+
+def test_close_execution_can_be_selected_explicitly() -> None:
+    dates = pd.date_range("2020-01-02", periods=5, freq="B")
+    price_data = research_prices(
+        dates, {"RB": [100.0, 120.0, 126.0, 151.2, 166.32]}
+    )
+    price_data["open"] = [101.0, 121.0, 124.0, 150.0, 170.0]
+    factor_data = factors(dates[:3], {"RB": [0.5, -0.5, 1.0]})
+
+    result = run_fast_research_backtest(
+        factor_data,
+        price_data,
+        universe(dates[:3], ("RB",)),
+        execution_lag=1,
+        execution_price_field="close",
+    )
+
+    assert result["metadata"]["execution_price_field"] == "close"
+    assert result["detail"].loc[0, "research_forward_return"] == pytest.approx(0.05)
+
+
+def test_unknown_execution_price_field_is_rejected() -> None:
+    dates = pd.date_range("2020-01-02", periods=5, freq="B")
+    with pytest.raises(ValueError, match="execution_price_field"):
+        run_fast_research_backtest(
+            factors(dates[:3], {"RB": [0.5, -0.5, 1.0]}),
+            research_prices(dates, {"RB": [100.0, 120.0, 126.0, 151.2, 166.32]}),
+            universe(dates[:3], ("RB",)),
+            execution_lag=1,
+            execution_price_field="settlement",
         )

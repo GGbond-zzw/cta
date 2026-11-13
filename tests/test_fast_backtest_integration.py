@@ -11,8 +11,8 @@ from china_cta.data.contracts import (
     get_signal_continuous_price,
 )
 from china_cta.data.rqdata_adapter import RQDataAdapter, RQDataConfig
-from china_cta.factors.carry import compute_carry_factor
-from china_cta.factors.trend import compute_trend_factor
+from china_cta.factors.unqualified.carry import compute_carry_factor
+from china_cta.factors.unqualified.trend import compute_trend_factor
 from china_cta.research.fast_backtest import (
     DETAIL_COLUMNS,
     run_fast_research_backtest,
@@ -111,7 +111,7 @@ def test_trend_carry_and_parameter_surface_share_one_backtest(tmp_path) -> None:
     snapshots = pd.concat(
         [
             get_contract_snapshot(
-                adapter, product, date, price_field="settlement"
+                adapter, product, date, price_field="close"
             )
             for date in SIGNAL_DATES
             for product in COMMODITIES

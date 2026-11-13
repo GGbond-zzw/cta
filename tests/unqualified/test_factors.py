@@ -4,12 +4,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from china_cta.factors.carry import (
+from china_cta.factors.unqualified.carry import (
     calculate_near_main_carry,
     compute_carry_factor,
 )
 from china_cta.factors.schema import FACTOR_COLUMNS, make_factor_table
-from china_cta.factors.trend import compute_trend_factor
+from china_cta.factors.unqualified.trend import compute_trend_factor
 
 
 def universe_for(dates, instruments=("RB",), eligible=True) -> pd.DataFrame:
@@ -56,7 +56,7 @@ def carry_snapshot(*, near_price=110.0, include_near=True) -> pd.DataFrame:
             "maturity_date": "2020-06-15",
             "days_to_maturity": 3,
             "price": near_price,
-            "price_field": "settlement",
+            "price_field": "close",
             "dominant_rank": pd.NA,
         },
         {
@@ -66,7 +66,7 @@ def carry_snapshot(*, near_price=110.0, include_near=True) -> pd.DataFrame:
             "maturity_date": "2020-07-15",
             "days_to_maturity": 33,
             "price": 108.0,
-            "price_field": "settlement",
+            "price_field": "close",
             "dominant_rank": pd.NA,
         },
         {
@@ -76,7 +76,7 @@ def carry_snapshot(*, near_price=110.0, include_near=True) -> pd.DataFrame:
             "maturity_date": "2020-10-15",
             "days_to_maturity": 125,
             "price": 100.0,
-            "price_field": "settlement",
+            "price_field": "close",
             "dominant_rank": 1,
         },
     ]
@@ -232,9 +232,9 @@ def test_carry_with_no_earlier_maturity_is_unavailable() -> None:
     assert pd.isna(diagnostics.loc[0, "raw_factor"])
 
 
-def test_carry_requires_settlement_curve_not_continuous_or_close() -> None:
+def test_carry_requires_close_curve() -> None:
     snapshots = carry_snapshot()
-    snapshots["price_field"] = "close"
+    snapshots["price_field"] = "settlement"
 
-    with pytest.raises(ValueError, match="settlement"):
+    with pytest.raises(ValueError, match="close"):
         calculate_near_main_carry(snapshots)

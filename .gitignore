@@ -9,6 +9,7 @@ __pycache__/
 .ipynb_checkpoints/
 .pytest_cache/
 .pytest_temp/
+.pytest_temp*/
 /.vscode/
 
 # Local market data, RQAlpha bundles/results, and environment backups
@@ -44,3 +45,10 @@ secrets*.yml
 # 已生成的旧版教学成品仅在本机保留；后续正式手册放在 docs/ 管理。
 /CTA_Alpha_Research_Framework_使用教学_backtest-v1.0.1.pdf
 /CTA_三因子Demo端到端报告_backtest-v1.0.1.pdf
+
+# Linux / WSL helper environments
+.venv-linux/
+
+# pytest scratch directories kept by --basetemp
+.pytest_tmp/
+.pytest_tmp_*/

@@ -13,8 +13,8 @@ from china_cta.data.contracts import (
     get_signal_continuous_price,
 )
 from china_cta.data.rqdata_adapter import RQDataAdapter, RQDataConfig
-from china_cta.factors.carry import compute_carry_factor
-from china_cta.factors.trend import compute_trend_factor
+from china_cta.factors.unqualified.carry import compute_carry_factor
+from china_cta.factors.unqualified.trend import compute_trend_factor
 from china_cta.portfolio.allocation import (
     TARGET_POSITION_COLUMNS,
     PortfolioConfig,
@@ -88,7 +88,7 @@ def real_inputs(adapter: RQDataAdapter, end_date: str):
                 adapter,
                 product,
                 SIGNAL_DATE,
-                price_field="settlement",
+                price_field="close",
             )
             for product in COMMODITIES
         ],
