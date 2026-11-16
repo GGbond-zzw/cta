@@ -93,14 +93,16 @@ has been inspected repeatedly, so treat the 2025 figures as optimistic.
 (50M capital, 50% margin budget, integer lots, 1-tick slippage, native fees) and
 calibrates the research leverage once so realised volatility hits the 20% target:
 pass 1 comes out at 8.8% volatility, the calibration multiplies exposure by 2.27,
-pass 2 reaches 13.2% because the margin budget is binding every day.
+pass 2 reaches 20.0%. The margin budget is applied to the **live account equity**
+(50% of that day's equity, `margin_basis="live_equity"`), so exposure compounds with the
+book instead of shrinking against a frozen 50M base.
 
 | segment | Sharpe | annualised | volatility | max drawdown |
 | --- | --- | --- | --- | --- |
 | train 2016-01-04 .. 2021-12-31 | 1.71 | 30.7% | 16.5% | -15.0% |
 | validation 2022-01-04 .. 2024-12-31 | 0.52 | 3.3% | 6.8% | -9.4% |
 | test 2025-01-02 .. 2026-09-04 | 0.93 | 6.6% | 7.2% | -8.8% |
-| overall | 1.35 | 18.5% | 13.2% | -15.0% |
+| overall | 1.35 | 28.4% | 20.0% | -27.5% |
 
 Trading friction over the full window: 7.4M commission and 25.9M one-tick
 slippage, i.e. 12.3% of gross P&L, or roughly 6.5% of capital per year.

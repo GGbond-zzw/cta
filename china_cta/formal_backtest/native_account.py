@@ -37,6 +37,17 @@ TARGET_COLUMNS: tuple[str, ...] = (
     "margin_used",
 )
 
+TARGET_EXPOSURE_COLUMNS: tuple[str, ...] = (
+    "trading_date",
+    "order_book_id",
+    "product",
+    "capital_units",
+    "price",
+    "multiplier",
+    "margin_rate",
+    "source_tag",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class NativeAccountConfig:
@@ -57,6 +68,7 @@ class NativeAccountConfig:
     futures_settlement_price_type: str = "close"
     log_level: str = "warning"
     strategy_name: str = "china_cta_native_4f_vol20"
+    margin_basis: str = "live_equity"
 
 
 def load_market(
@@ -261,6 +273,236 @@ def build_target_quantities(
     return frame.loc[:, list(TARGET_COLUMNS) + ["source_tag"]].sort_values(
         ["trading_date", "order_book_id"]
     ).reset_index(drop=True)
+
+
+def build_target_exposures(
+    exposure: pd.DataFrame,
+    dominant: pd.DataFrame,
+    market: Mapping[str, pd.DataFrame],
+    leverage: pd.Series | None,
+    config: NativeAccountConfig,
+    *,
+    source_tag: str = "four_factor_book",
+) -> pd.DataFrame:
+    """Resolve per-product exposure into per-contract notional targets.
+
+    Nothing is truncated here.  Quantities depend on the account equity of the
+    session, so they are produced inside the replay by :func:`plan_day_targets`.
+    ``capital_units`` is the signed notional as a fraction of that equity.
+    """
+
+    bars = market["bars"]
+    instruments = market["instruments"].set_index("order_book_id")
+    terms = market["terms"].set_index("product")
+    calendar = trading_days(bars)
+    execution_dates = next_trading_day(exposure["trading_date"].unique(), calendar)
+
+    settlement = (
+        bars.loc[:, ["order_book_id", "trading_date", "settlement", "close"]]
+        .assign(
+            settlement=lambda frame: frame["settlement"].where(
+                frame["settlement"].gt(0), frame["close"]
+            )
+        )
+        .set_index(["trading_date", "order_book_id"])["settlement"]
+    )
+    contract_of = dominant.set_index(["trading_date", "product"])["dominant_order_book_id"]
+
+    rows: list[dict[str, Any]] = []
+    for date, group in exposure.groupby("trading_date", observed=True):
+        stamp = pd.Timestamp(date)
+        execution = execution_dates.get(stamp)
+        if execution is None:
+            continue
+        lev = 1.0
+        if leverage is not None and len(leverage):
+            value = leverage.get(stamp)
+            if value is not None and math.isfinite(float(value)):
+                lev = float(value)
+        for record in group.itertuples(index=False):
+            product = str(record.product)
+            exposure_value = float(record.exposure)
+            if exposure_value == 0.0:
+                continue
+            try:
+                contract = str(contract_of.loc[(stamp, product)])
+            except KeyError:
+                continue
+            try:
+                price = float(settlement.loc[(stamp, contract)])
+            except KeyError:
+                continue
+            if not math.isfinite(price) or price <= 0:
+                continue
+            if contract not in instruments.index:
+                continue
+            multiplier = float(instruments.at[contract, "contract_multiplier"])
+            if not math.isfinite(multiplier) or multiplier <= 0:
+                multiplier = 1.0
+            margin_rate = 0.10
+            if product in terms.index:
+                candidate = float(terms.at[product, "margin_rate"])
+                if math.isfinite(candidate) and candidate > 0:
+                    margin_rate = candidate
+            rows.append(
+                {
+                    "trading_date": execution,
+                    "order_book_id": contract,
+                    "product": product,
+                    "capital_units": lev * exposure_value,
+                    "price": price,
+                    "multiplier": multiplier,
+                    "margin_rate": margin_rate,
+                    "source_tag": source_tag,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=list(TARGET_EXPOSURE_COLUMNS))
+    return pd.DataFrame(rows).loc[:, list(TARGET_EXPOSURE_COLUMNS)].sort_values(
+        ["trading_date", "order_book_id"]
+    ).reset_index(drop=True)
+
+
+def plan_day_targets(
+    rows: pd.DataFrame, equity: float, config: NativeAccountConfig
+) -> pd.DataFrame:
+    """Integer lots for one session, sized off that session's account equity."""
+
+    empty = pd.DataFrame(columns=list(TARGET_COLUMNS) + ["source_tag"])
+    if rows is None or len(rows) == 0 or equity <= 0:
+        return empty
+    budget = float(config.margin_budget) * float(equity)
+    sized: list[tuple[Any, float, float]] = []
+    for record in rows.itertuples(index=False):
+        notional = float(equity) * float(record.capital_units)
+        price = float(record.price)
+        multiplier = float(record.multiplier)
+        lots = float(math.trunc(notional / (price * multiplier)))
+        if lots == 0:
+            continue
+        margin = abs(lots) * price * multiplier * float(record.margin_rate)
+        sized.append((record, lots, margin))
+    if not sized:
+        return empty
+    total_margin = sum(item[2] for item in sized)
+    scale = 1.0 if total_margin <= budget or total_margin <= 0 else budget / total_margin
+    records: list[dict[str, Any]] = []
+    for record, lots, margin in sized:
+        quantity = int(math.trunc(lots * scale))
+        if quantity == 0:
+            continue
+        records.append(
+            {
+                "trading_date": record.trading_date,
+                "order_book_id": record.order_book_id,
+                "product": record.product,
+                "target_quantity": quantity,
+                "exposure": float(record.capital_units),
+                "quantity_before_margin_scale": int(lots),
+                "margin_used": float(margin * scale),
+                "source_tag": str(record.source_tag),
+            }
+        )
+    return pd.DataFrame(records, columns=list(TARGET_COLUMNS) + ["source_tag"])
+
+
+def run_native_account_dynamic(
+    exposures: pd.DataFrame,
+    config: NativeAccountConfig,
+    *,
+    tick_sizes: Mapping[str, float] | None = None,
+) -> dict[str, Any]:
+    """Replay capital-unit exposures, re-sizing every session off live equity."""
+
+    from rqalpha import run_func
+    from rqalpha.apis import order_to, update_universe
+
+    schedule = {
+        pd.Timestamp(date): group.sort_values("order_book_id")
+        for date, group in exposures.groupby("trading_date", observed=True)
+    }
+    contract_ids = sorted(exposures["order_book_id"].unique().tolist())
+    processed: set[pd.Timestamp] = set()
+    snapshots: list[dict[str, Any]] = []
+    filled: list[pd.DataFrame] = []
+    sizing: list[dict[str, Any]] = []
+
+    tick_map = {str(key): float(value) for key, value in (tick_sizes or {}).items()}
+
+    def init(context: Any) -> None:
+        _install_opening_slippage(config.slippage_ticks, tick_map)
+        if contract_ids:
+            update_universe(contract_ids)
+        context._native_schedule = schedule
+        context._native_processed = processed
+        context._native_filled = filled
+        context._native_sizing = sizing
+
+    def open_auction(context: Any, bar_dict: Any) -> None:
+        del bar_dict
+        raw = getattr(context, "trading_dt", None)
+        today = pd.Timestamp(raw if raw is not None else context.now).normalize()
+        if today not in schedule or today in processed:
+            return
+        equity = float(context.portfolio.total_value)
+        planned = plan_day_targets(schedule[today], equity, config)
+        wanted = {
+            str(record.order_book_id): int(record.target_quantity)
+            for record in planned.itertuples(index=False)
+        }
+        sizing.append({"trading_date": today, "equity": equity, "planned_contracts": len(wanted)})
+        held = {
+            position.order_book_id
+            for position in context.portfolio.get_positions()
+            if position.quantity != 0
+        }
+        for contract in sorted(held - set(wanted)):
+            order_to(contract, 0)
+        for contract, quantity in wanted.items():
+            order_to(contract, quantity)
+        if not planned.empty:
+            filled.append(planned)
+        processed.add(today)
+
+    def handle_bar(context: Any, bar_dict: Any) -> None:
+        del bar_dict
+        raw = getattr(context, "trading_dt", None)
+        today = pd.Timestamp(raw if raw is not None else context.now).normalize()
+        for position in context.portfolio.get_positions():
+            if position.quantity == 0:
+                continue
+            direction = str(getattr(position, "direction", "LONG")).upper()
+            sign = -1 if "SHORT" in direction else 1
+            snapshots.append(
+                {
+                    "trading_date": today,
+                    "order_book_id": str(position.order_book_id),
+                    "quantity": sign * int(position.quantity),
+                }
+            )
+
+    rqalpha_config = build_rqalpha_config(config)
+    result = run_func(
+        config=rqalpha_config, init=init, open_auction=open_auction, handle_bar=handle_bar
+    )
+
+    targets = (
+        pd.concat(filled, ignore_index=True)
+        if filled
+        else pd.DataFrame(columns=list(TARGET_COLUMNS) + ["source_tag"])
+    )
+    unprocessed = sorted(set(schedule) - processed)
+    analyser = result.get("sys_analyser", {})
+    return {
+        "portfolio": analyser.get("portfolio"),
+        "trades": analyser.get("trades"),
+        "summary": analyser.get("summary", {}),
+        "unprocessed_dates": [date.date().isoformat() for date in unprocessed],
+        "rqalpha_config": rqalpha_config,
+        "positions": pd.DataFrame(snapshots, columns=list(POSITION_COLUMNS)),
+        "targets": targets,
+        "sizing": pd.DataFrame(sizing),
+    }
 
 
 def _install_opening_slippage(ticks: float, tick_sizes: dict[str, float]) -> None:

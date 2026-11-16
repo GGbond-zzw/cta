@@ -97,6 +97,7 @@ def _risk_diagnostics(
     market: dict[str, pd.DataFrame],
     capital: float,
     output: Path,
+    equity: pd.Series | None = None,
 ) -> dict[str, float]:
     if targets.empty:
         return {}
@@ -114,19 +115,26 @@ def _risk_diagnostics(
         margin=("margin_used", "sum"),
         contracts=("order_book_id", "size"),
     )
-    daily["gross_over_capital"] = daily["gross_notional"] / capital
-    daily["margin_over_capital"] = daily["margin"] / capital
+    daily.index = pd.to_datetime(daily.index)
+    if equity is not None and not equity.empty:
+        reference = equity.reindex(daily.index)
+        reference = reference.ffill().bfill()
+    else:
+        reference = pd.Series(capital, index=daily.index, dtype=float)
+    daily["equity"] = reference
+    daily["gross_over_equity"] = daily["gross_notional"] / daily["equity"]
+    daily["margin_over_equity"] = daily["margin"] / daily["equity"]
     daily.to_csv(output / "daily_risk.csv", float_format="%.17g")
     summary = {
-        "gross_over_capital_median": float(daily["gross_over_capital"].median()),
-        "gross_over_capital_max": float(daily["gross_over_capital"].max()),
-        "margin_over_capital_median": float(daily["margin_over_capital"].median()),
-        "margin_over_capital_max": float(daily["margin_over_capital"].max()),
+        "gross_over_equity_median": float(daily["gross_over_equity"].median()),
+        "gross_over_equity_max": float(daily["gross_over_equity"].max()),
+        "margin_over_equity_median": float(daily["margin_over_equity"].median()),
+        "margin_over_equity_max": float(daily["margin_over_equity"].max()),
         "contracts_per_day_median": float(daily["contracts"].median()),
     }
     print(
-        "risk: gross/capital median={gross_over_capital_median:.2f} max={gross_over_capital_max:.2f} "
-        "| margin/capital median={margin_over_capital_median:.2f} max={margin_over_capital_max:.2f} "
+        "risk: gross/equity median={gross_over_equity_median:.2f} max={gross_over_equity_max:.2f} "
+        "| margin/equity median={margin_over_equity_median:.2%} max={margin_over_equity_max:.2%} "
         "| contracts/day median={contracts_per_day_median:.0f}".format(**summary)
     )
     return summary
@@ -288,12 +296,13 @@ def main() -> None:
     def replay(
         leverage_series: pd.Series, tag: str
     ) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
-        targets = native.build_target_quantities(
+        exposures = native.build_target_exposures(
             exposure, dominant, market, leverage_series, config
         )
-        if targets.empty:
+        if exposures.empty:
             raise SystemExit("no target positions were produced")
-        result = native.run_native_account(targets, config, tick_sizes=tick_sizes)
+        result = native.run_native_account_dynamic(exposures, config, tick_sizes=tick_sizes)
+        targets = result["targets"]
         equity = native.daily_equity(result)
         metrics = native.performance_metrics(equity)
         print(
@@ -373,13 +382,16 @@ def main() -> None:
             book_dir = output / "factors" / name
             book_config = dataclasses.replace(config, output_dir=book_dir)
             try:
-                single_targets = native.build_target_quantities(
+                single_exposures = native.build_target_exposures(
                     single, dominant, market, leverage, book_config
                 )
-                if single_targets.empty:
+                if single_exposures.empty:
                     print(f"[{name}] no target positions, skipped")
                     continue
-                single_result = native.run_native_account(single_targets, book_config, tick_sizes=tick_sizes)
+                single_result = native.run_native_account_dynamic(
+                    single_exposures, book_config, tick_sizes=tick_sizes
+                )
+                single_targets = single_result["targets"]
                 single_equity = native.daily_equity(single_result)
                 single_metrics = native.performance_metrics(single_equity)
                 native.write_outputs(
@@ -427,7 +439,10 @@ def main() -> None:
         )
         _plot_books(books, output / "equity_comparison.png")
 
-    risk = _risk_diagnostics(targets, market, args.capital, output)
+    equity_series = pd.read_csv(
+        output / "daily_equity.csv", parse_dates=["date"]
+    ).set_index("date")["total_value"]
+    risk = _risk_diagnostics(targets, market, args.capital, output, equity=equity_series)
     pd.Series(
         {
             "calibration_factor": calibration,
