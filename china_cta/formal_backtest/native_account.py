@@ -467,6 +467,7 @@ def annotate_execution_time(
     is_night = frame["order_book_id"].astype(str).map(lambda value: product_of(value) in night_contracts)
     fill_date = previous.where(is_night, trading_date)
     offset = pd.to_timedelta(is_night.map({True: NIGHT_SESSION_OPEN, False: DAY_SESSION_OPEN}))
+    frame["product"] = frame["order_book_id"].astype(str).map(product_of)
     frame["night_session"] = is_night.to_numpy()
     frame[EXECUTION_TIME_COLUMN] = (fill_date + offset).dt.strftime("%Y-%m-%d %H:%M:%S")
     return frame
@@ -478,6 +479,7 @@ def run_native_account_dynamic(
     *,
     tick_sizes: Mapping[str, float] | None = None,
     night_products: Collection[str] | None = None,
+    session_calendar: Iterable[Any] | None = None,
 ) -> dict[str, Any]:
     """Replay capital-unit exposures, re-sizing every session off live equity."""
 
@@ -562,7 +564,9 @@ def run_native_account_dynamic(
     analyser = result.get("sys_analyser", {})
     return {
         "portfolio": analyser.get("portfolio"),
-        "trades": annotate_execution_time(analyser.get("trades"), schedule, night_products),
+        "trades": annotate_execution_time(
+            analyser.get("trades"), session_calendar or schedule, night_products
+        ),
         "summary": analyser.get("summary", {}),
         "unprocessed_dates": [date.date().isoformat() for date in unprocessed],
         "rqalpha_config": rqalpha_config,
@@ -606,6 +610,7 @@ def run_native_account(
     *,
     tick_sizes: Mapping[str, float] | None = None,
     night_products: Collection[str] | None = None,
+    session_calendar: Iterable[Any] | None = None,
 ) -> dict[str, Any]:
     """Replay ``targets`` into an RQAlpha futures account and return its output."""
 
@@ -679,7 +684,9 @@ def run_native_account(
     analyser = result.get("sys_analyser", {})
     return {
         "portfolio": analyser.get("portfolio"),
-        "trades": annotate_execution_time(analyser.get("trades"), schedule, night_products),
+        "trades": annotate_execution_time(
+            analyser.get("trades"), session_calendar or schedule, night_products
+        ),
         "summary": analyser.get("summary", {}),
         "unprocessed_dates": [date.date().isoformat() for date in unprocessed],
         "rqalpha_config": rqalpha_config,

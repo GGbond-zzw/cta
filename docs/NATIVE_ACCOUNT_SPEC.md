@@ -217,7 +217,9 @@ bar 的 `open` 就是该时段的第一个成交价。因此
 
 * `night_session`：该合约所属品种是否有夜盘；
 * `execution_time`：按上表换算出的**实际成交时刻**（`YYYY-MM-DD HH:MM:SS`）；
-* `product`：合约对应的品种代码。
+* `product`：合约对应的品种代码（由 `order_book_id` 前缀解析）。
+
+换算用的交易日历取自 bundle 的 `futures.h5`（而非目标持仓表的日期），所以窗口第一天也能正确定位到前一交易日。
 
 夜盘判定读的是 bundle 的 `instruments.pk → trading_hours`（首段以 `21:` 开头即为夜盘品种），
 由 `native_account.night_products()` 解析，`native_account.annotate_execution_time()` 负责换算。

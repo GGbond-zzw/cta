@@ -384,6 +384,7 @@ def main() -> None:
     )
 
     night_sessions = native.night_products(market["instruments"])
+    session_calendar = sorted(pd.to_datetime(market["bars"]["trading_date"]).unique())
     print(f"night-session products: {len(night_sessions)} of {market['terms'].shape[0]}")
     term_tick = market["terms"].set_index("product")["tick_size"].astype(float)
     tick_sizes = {
@@ -400,7 +401,11 @@ def main() -> None:
         if exposures.empty:
             raise SystemExit("no target positions were produced")
         result = native.run_native_account_dynamic(
-            exposures, config, tick_sizes=tick_sizes, night_products=night_sessions
+            exposures,
+            config,
+            tick_sizes=tick_sizes,
+            night_products=night_sessions,
+            session_calendar=session_calendar,
         )
         targets = result["targets"]
         equity = native.daily_equity(result)
@@ -500,6 +505,7 @@ def main() -> None:
                     book_config,
                     tick_sizes=tick_sizes,
                     night_products=night_sessions,
+                    session_calendar=session_calendar,
                 )
                 single_targets = single_result["targets"]
                 single_equity = native.daily_equity(single_result)
