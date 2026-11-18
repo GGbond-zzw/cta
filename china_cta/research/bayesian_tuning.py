@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from china_cta.factors.cta_common import cross_sectional_table, standard_table
+from china_cta.factors.mined.sleeves import build_mined_factor
 from china_cta.factors.cta_curve import calculate_curve_metrics
 from china_cta.factors.cta_momentum_base import calculate_time_series_momentum
 from china_cta.factors.qualified.fixed_maturity_carry import (
@@ -41,6 +42,12 @@ from china_cta.factors.qualified.oi_participation_trend import (
 )
 from china_cta.research.fast_backtest import run_fast_research_backtest
 
+
+MINED_TUNING_FACTORS: tuple[str, ...] = (
+    "crowded_trend_reversal_60d",
+    "volume_oi_coflow_10d",
+    "volume_burst_vol_reversal_60d",
+)
 
 TRAIN_START = "2016-01-04"
 TRAIN_END = "2021-12-31"
@@ -68,6 +75,9 @@ def load_inputs(input_dir: Path = TUNING_INPUT_DIR) -> dict[str, pd.DataFrame]:
     if missing:
         raise FileNotFoundError("Missing tuning inputs: " + ", ".join(missing))
     inputs = {key: pd.read_parquet(path) for key, path in paths.items()}
+    flows_path = input_dir / "product_flows.parquet"
+    if flows_path.is_file():
+        inputs["product_flows"] = pd.read_parquet(flows_path)
     inputs["continuous_prices"].attrs.update(
         {
             "usage": "signal_research_only",
@@ -172,6 +182,9 @@ def build_factor(name: str, params: dict[str, Any], inputs: dict[str, pd.DataFra
             signal_scale=scale,
         )
         return _rename_factor(table, name)
+
+    if name in MINED_TUNING_FACTORS:
+        return build_mined_factor(name, params, inputs)
 
     raise ValueError(f"unknown tuning factor: {name}")
 
@@ -310,6 +323,26 @@ def _suggest_oi_participation(trial: Any) -> dict[str, Any]:
     }
 
 
+def _suggest_crowded_trend(trial: Any) -> dict[str, Any]:
+    return {
+        "trend_window": trial.suggest_int("trend_window", 20, 120, step=10),
+        "correlation_window": trial.suggest_int("correlation_window", 20, 120, step=10),
+    }
+
+
+def _suggest_volume_coflow(trial: Any) -> dict[str, Any]:
+    return {"correlation_window": trial.suggest_int("correlation_window", 5, 60, step=5)}
+
+
+def _suggest_volume_burst(trial: Any) -> dict[str, Any]:
+    return {
+        "smoothing_window": trial.suggest_int("smoothing_window", 20, 120, step=10),
+        "correlation_window": trial.suggest_int("correlation_window", 5, 60, step=5),
+        "delta_window": trial.suggest_int("delta_window", 5, 60, step=5),
+        "volatility_window": trial.suggest_int("volatility_window", 20, 120, step=10),
+    }
+
+
 def _suggest_skew_ts(trial: Any) -> dict[str, Any]:
     return {"lookback": trial.suggest_int("lookback", 63, 504, step=21)}
 
@@ -357,6 +390,40 @@ TUNING_SPECS: dict[str, TuningSpec] = {
         resolve=_resolve_identity,
         fixed={"signal_scale": 0.50},
     ),
+    "crowded_trend_reversal_60d": TuningSpec(
+        name="crowded_trend_reversal_60d",
+        description="mined: fade trends pushed by high channel position and volatility",
+        baseline={
+            "trend_window": 60,
+            "correlation_window": 60,
+            "signal_scale": 0.7073720289720415,
+        },
+        suggest=_suggest_crowded_trend,
+        resolve=_resolve_identity,
+        fixed={"signal_scale": 0.7073720289720415},
+    ),
+    "volume_oi_coflow_10d": TuningSpec(
+        name="volume_oi_coflow_10d",
+        description="mined: correlation of volume change with the OI surprise",
+        baseline={"correlation_window": 10, "signal_scale": 0.7148378264008488},
+        suggest=_suggest_volume_coflow,
+        resolve=_resolve_identity,
+        fixed={"signal_scale": 0.7148378264008488},
+    ),
+    "volume_burst_vol_reversal_60d": TuningSpec(
+        name="volume_burst_vol_reversal_60d",
+        description="mined: fade volume bursts that arrive while volatility expands",
+        baseline={
+            "smoothing_window": 60,
+            "correlation_window": 20,
+            "delta_window": 20,
+            "volatility_window": 60,
+            "signal_scale": 0.3029101622490162,
+        },
+        suggest=_suggest_volume_burst,
+        resolve=_resolve_identity,
+        fixed={"signal_scale": 0.3029101622490162},
+    ),
     "historical_skewness_252d": TuningSpec(
         name="historical_skewness_252d",
         description="absolute historical return skewness",
@@ -375,6 +442,9 @@ SCALE_RANGES: dict[str, tuple[float, float]] = {
     "fixed_maturity_carry_90_180d": (0.05, 0.40),
     "oi_participation_trend_60d": (0.10, 1.0),
     "historical_skewness_252d": (0.5, 1.0),
+    "crowded_trend_reversal_60d": (0.30, 1.50),
+    "volume_oi_coflow_10d": (0.30, 1.50),
+    "volume_burst_vol_reversal_60d": (0.10, 0.60),
 }
 
 SCALE_TUNED_SPECS: dict[str, TuningSpec] = {

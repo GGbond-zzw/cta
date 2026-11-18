@@ -25,6 +25,11 @@ FACTORS = (
     "oi_participation_trend_60d",
     "historical_skewness_252d",
 )
+MINED_FACTORS = (
+    "crowded_trend_reversal_60d",
+    "volume_oi_coflow_10d",
+    "volume_burst_vol_reversal_60d",
+)
 
 _INPUTS: dict | None = None
 

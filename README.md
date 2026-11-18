@@ -37,6 +37,8 @@ python scripts/30_tune_factors.py --trials 60
 python scripts/31_tune_factors_by_process.py --trials 300 --processes 3
 python scripts/32_verify_tuning_outputs.py
 python scripts/40_correlation_report.py
+python scripts/41_correlation_report_7f.py --package-dir <exported_factor_package>   # optional: 7-factor correlation
+python scripts/42_backtest_7f_equal.py --package-dir <exported_factor_package>      # optional: 7-factor equal-weight book
 python scripts/50_backtest_portfolio.py --vol-target 0.0
 python scripts/50_backtest_portfolio.py --vol-target 0.2 --run-name equal_weight_4f
 python scripts/60_render_run_chart.py
@@ -99,16 +101,22 @@ book instead of shrinking against a frozen 50M base.
 
 | segment | Sharpe | annualised | volatility | max drawdown |
 | --- | --- | --- | --- | --- |
-| train 2016-01-04 .. 2021-12-31 | 1.71 | 30.7% | 16.5% | -15.0% |
-| validation 2022-01-04 .. 2024-12-31 | 0.52 | 3.3% | 6.8% | -9.4% |
-| test 2025-01-02 .. 2026-09-04 | 0.93 | 6.6% | 7.2% | -8.8% |
+| train 2016-01-04 .. 2021-12-31 | 1.91 | 42.4% | 19.5% | -18.9% |
+| validation 2022-01-04 .. 2024-12-31 | 0.40 | 5.9% | 19.0% | -27.5% |
+| test 2025-01-02 .. 2026-09-04 | 1.08 | 25.3% | 23.4% | -25.8% |
 | overall | 1.35 | 28.4% | 20.0% | -27.5% |
 
-Trading friction over the full window: 7.4M commission and 25.9M one-tick
-slippage, i.e. 12.3% of gross P&L, or roughly 6.5% of capital per year.
+Trading friction over the full window: 23.8M commission and 77.1M one-tick
+slippage, 100.9M in total, i.e. 14.3% of gross P&L — about 5% of average equity
+per year, because the exposure now compounds with the book.
 The native account needs contract-level bars from a local RQAlpha bundle, so it
 stops at the bundle's last trading day (2026-09-04) rather than at the research
 inputs' last day.
+
+Sleeves mined by the expression search can join the same account through
+`--extra-package/--extra-factors`; the registry and naming rules are in
+[docs/EXPORTED_SLEEVES.md](docs/EXPORTED_SLEEVES.md). A seven-sleeve book runs as
+`--book-factors none -out-dir results/final_7f_native_vol20`.
 
 ## Environment notes
 

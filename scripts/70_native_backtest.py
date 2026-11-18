@@ -30,6 +30,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from china_cta.formal_backtest import native_account as native  # noqa: E402
 from china_cta.research import bayesian_tuning as bt  # noqa: E402
+from china_cta.factors import exported as exported_sleeves  # noqa: E402
 from china_cta.research.fast_backtest import run_fast_research_backtest  # noqa: E402
 from china_cta.runtime_paths import get_rqalpha_bundle_path  # noqa: E402
 
@@ -84,6 +85,67 @@ def _build_sleeve(task: tuple[str, str]) -> tuple[str, pd.DataFrame, pd.DataFram
     )
     daily["sleeve"] = name
     return name, signals, daily
+
+
+def _build_exported_sleeve(task: tuple[str, str]) -> tuple[str, pd.DataFrame, pd.DataFrame]:
+    """Frozen mined signal -> sleeve signals + research-proxy daily returns."""
+
+    name, package_dir = task
+    sleeve = exported_sleeves.resolve(name)[0]
+    table = exported_sleeves.load_signals(Path(package_dir), sleeve)
+    result = run_fast_research_backtest(
+        table,
+        _INPUTS["continuous_prices"],
+        _INPUTS["universe"],
+        execution_lag=1,
+        cost_rate=0.0001,
+        execution_price_field="open",
+        include_breakdowns=False,
+    )
+    detail = result["detail"]
+    # ``detail`` is already joined with the universe, so the extra sleeve trades exactly the
+    # products the project can price and size instead of the package's wider 35-product set.
+    signals = pd.DataFrame(
+        {
+            "trading_date": pd.to_datetime(detail["signal_date"]),
+            "product": detail["instrument"].astype(str),
+            "signal": detail["signal"].astype(float),
+            "sleeve": name,
+        }
+    )
+    signals = signals.loc[signals["signal"].ne(0)].reset_index(drop=True)
+    dropped = sorted(set(table["instrument"]) - set(signals["product"]))
+    if dropped:
+        print(f"  {name}: outside the project universe: {dropped}")
+    daily = (
+        detail.groupby("realization_date")["net_signal_return"]
+        .mean()
+        .rename("net_signal_return")
+        .reset_index()
+    )
+    daily["sleeve"] = name
+    return name, signals, daily
+
+
+def _build_any(task: tuple[str, str, str]) -> tuple[str, pd.DataFrame, pd.DataFrame]:
+    kind, name, directory = task
+    if kind == "exported":
+        return _build_exported_sleeve((name, directory))
+    return _build_sleeve((name, directory))
+
+
+def _book_selection(spec: str, sleeves: dict[str, pd.DataFrame]) -> set[str]:
+    """``all`` (default), ``none``, or a comma separated list of sleeve names."""
+
+    raw = [item.strip() for item in str(spec).split(",") if item.strip()]
+    if not raw or raw == ["all"]:
+        return set(sleeves)
+    if raw == ["none"]:
+        return set()
+    unknown = [item for item in raw if item not in sleeves]
+    if unknown:
+        raise SystemExit(f"--book-factors: not part of this run: {unknown}")
+    return set(raw)
 
 
 def _leverage(daily: pd.Series, *, window: int, target: float, cap: float) -> pd.Series:
@@ -171,6 +233,21 @@ def _plot_books(books: dict[str, pd.Series], target: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--factors", default=",".join(DEFAULT_FACTORS))
+    parser.add_argument(
+        "--extra-package",
+        default="",
+        help="directory of a frozen mined-signal export (see china_cta.factors.exported)",
+    )
+    parser.add_argument(
+        "--extra-factors",
+        default="all",
+        help="comma separated exported sleeve names, or all/none",
+    )
+    parser.add_argument(
+        "--book-factors",
+        default="all",
+        help="comma separated sleeves to replay as single-sleeve accounts, or all/none",
+    )
     parser.add_argument("--tuned-dir", default=str(DEFAULT_TUNED_DIR))
     parser.add_argument("--input-dir", default=str(DEFAULT_INPUT_DIR))
     parser.add_argument("--out-dir", default=str(DEFAULT_OUTPUT_DIR))
@@ -206,8 +283,21 @@ def main() -> None:
     output = Path(args.out_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    print(f"building {len(factors)} sleeves from {tuned_dir}")
-    tasks = [(name, str(tuned_dir)) for name in factors]
+    exported: tuple[exported_sleeves.ExportedSleeve, ...] = ()
+    if args.extra_package:
+        exported = exported_sleeves.resolve(args.extra_factors)
+        exported_sleeves.validate_package(Path(args.extra_package), exported)
+    print(f"building {len(factors)} tuned sleeves from {tuned_dir}")
+    if exported:
+        print(f"appending {len(exported)} exported sleeves from {args.extra_package}")
+        for sleeve in exported:
+            print(f"  {sleeve.name:<34} <- {sleeve.folder} ({sleeve.source})")
+    tasks: list[tuple[str, str, str]] = [
+        ("tuned", name, str(tuned_dir)) for name in factors
+    ]
+    tasks += [
+        ("exported", sleeve.name, str(Path(args.extra_package))) for sleeve in exported
+    ]
     signals_by_sleeve: dict[str, pd.DataFrame] = {}
     daily_by_sleeve: dict[str, pd.Series] = {}
     with ProcessPoolExecutor(
@@ -215,12 +305,18 @@ def main() -> None:
         initializer=_init_worker,
         initargs=(args.input_dir,),
     ) as pool:
-        for name, signals, daily in pool.map(_build_sleeve, tasks):
+        for name, signals, daily in pool.map(_build_any, tasks):
             signals_by_sleeve[name] = signals
             daily_by_sleeve[name] = daily.set_index("realization_date")["net_signal_return"]
             print(f"  built {name:<34} signals={len(signals):>7} days={len(daily):>5}")
 
     weights = {name: 1.0 / len(signals_by_sleeve) for name in signals_by_sleeve}
+    meta: dict[str, Any] = {
+        "sleeves": list(signals_by_sleeve),
+        "sleeve_weights": dict(weights),
+        "exported_package": str(Path(args.extra_package)) if args.extra_package else "",
+        "exported_sleeves": [sleeve.as_dict() for sleeve in exported],
+    }
 
     all_stamps = pd.to_datetime(
         sorted({stamp for series in daily_by_sleeve.values() for stamp in series.index})
@@ -287,6 +383,8 @@ def main() -> None:
         log_level=args.log_level,
     )
 
+    night_sessions = native.night_products(market["instruments"])
+    print(f"night-session products: {len(night_sessions)} of {market['terms'].shape[0]}")
     term_tick = market["terms"].set_index("product")["tick_size"].astype(float)
     tick_sizes = {
         str(row.order_book_id): float(term_tick.get(row.product, 0.0) or 0.0)
@@ -301,7 +399,9 @@ def main() -> None:
         )
         if exposures.empty:
             raise SystemExit("no target positions were produced")
-        result = native.run_native_account_dynamic(exposures, config, tick_sizes=tick_sizes)
+        result = native.run_native_account_dynamic(
+            exposures, config, tick_sizes=tick_sizes, night_products=night_sessions
+        )
         targets = result["targets"]
         equity = native.daily_equity(result)
         metrics = native.performance_metrics(equity)
@@ -321,7 +421,11 @@ def main() -> None:
         result1,
         config,
         targets=targets1,
-        extra={"pass": "pass1", "leverage_median": float(overlay_leverage.median())},
+        extra={
+            "pass": "pass1",
+            "leverage_median": float(overlay_leverage.median()),
+            **meta,
+        },
     )
     first_equity = output / "daily_equity.csv"
     (output / "daily_equity_pass1.csv").write_text(first_equity.read_text(encoding="utf-8"), encoding="utf-8")
@@ -350,6 +454,7 @@ def main() -> None:
             targets=targets,
             extra={
                 "pass": "pass2",
+                **meta,
                 "calibration_factor": calibration,
                 "leverage_median": float(scaled.median()),
                 "pass1": metrics1,
@@ -357,7 +462,7 @@ def main() -> None:
         )
 
     # ---- attribution, segments and per-factor native books -------------------
-    book_label = "equal_weight_4f"
+    book_label = f"equal_weight_{len(signals_by_sleeve)}f"
     attribution = native.attribute_pnl(result.get("positions"), result.get("trades"), market)
     report = native.write_attribution(
         attribution, native.daily_equity(result), args.capital, output, label=book_label
@@ -371,7 +476,9 @@ def main() -> None:
 
     if args.factor_books:
         books: dict[str, pd.Series] = {book_label: native.daily_equity(result)}
-        for name in sorted(signals_by_sleeve):
+        selected = _book_selection(args.book_factors, signals_by_sleeve)
+        print(f"single-sleeve books: {sorted(selected) if selected else 'none'}")
+        for name in sorted(selected):
             single = native.combine_sleeves(signals_by_sleeve[name], {name: 1.0})
             leverage = _leverage(
                 daily_by_sleeve[name],
@@ -389,7 +496,10 @@ def main() -> None:
                     print(f"[{name}] no target positions, skipped")
                     continue
                 single_result = native.run_native_account_dynamic(
-                    single_exposures, book_config, tick_sizes=tick_sizes
+                    single_exposures,
+                    book_config,
+                    tick_sizes=tick_sizes,
+                    night_products=night_sessions,
                 )
                 single_targets = single_result["targets"]
                 single_equity = native.daily_equity(single_result)

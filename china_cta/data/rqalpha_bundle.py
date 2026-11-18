@@ -44,6 +44,8 @@ def load_instruments(bundle_dir: str | Path, products: list[str] | tuple[str, ..
         rows = pickle.load(handle)
     frame = pd.DataFrame([row for row in rows if isinstance(row, dict)])
     frame = frame.loc[frame["type"].eq("Future")].copy()
+    if "trading_hours" not in frame.columns:
+        frame["trading_hours"] = None
     if products is not None:
         frame = frame.loc[frame["underlying_symbol"].isin(list(products))]
     frame = frame.loc[
@@ -52,6 +54,7 @@ def load_instruments(bundle_dir: str | Path, products: list[str] | tuple[str, ..
             "order_book_id",
             "underlying_symbol",
             "contract_multiplier",
+            "trading_hours",
             "maturity_date",
             "listed_date",
             "de_listed_date",

@@ -16,7 +16,7 @@ import json
 import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Collection, Iterable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -97,6 +97,7 @@ def load_market(
         cached_instruments is not None
         and len(cached_instruments) == len(instruments)
         and "contract_multiplier" in cached_instruments.columns
+        and "trading_hours" in cached_instruments.columns
     ):
         instruments = cached_instruments
     else:
@@ -406,11 +407,77 @@ def plan_day_targets(
     return pd.DataFrame(records, columns=list(TARGET_COLUMNS) + ["source_tag"])
 
 
+EXECUTION_TIME_COLUMN: str = "execution_time"
+NIGHT_SESSION_OPEN: str = "21:00:00"
+DAY_SESSION_OPEN: str = "09:00:00"
+
+
+def product_of(order_book_id: str) -> str:
+    """Return the product prefix of a futures contract (``AG1606`` -> ``AG``)."""
+
+    match = re.match(r"^([A-Za-z]+)", str(order_book_id))
+    return match.group(1).upper() if match else str(order_book_id).upper()
+
+
+def night_products(instruments: pd.DataFrame) -> set[str]:
+    """Products whose first trading slot is the 21:00 night session."""
+
+    if instruments is None or instruments.empty:
+        return set()
+    frame = instruments.copy()
+    if "product" not in frame.columns and "underlying_symbol" in frame.columns:
+        frame = frame.rename(columns={"underlying_symbol": "product"})
+    hours = frame.get("trading_hours")
+    if hours is None:
+        return set()
+    first_slot = hours.astype(str).str.split(",").str[0].str.strip()
+    frame = frame.assign(_night=first_slot.str.startswith("21:"))
+    return set(frame.loc[frame["_night"], "product"].astype(str).unique())
+
+
+def annotate_execution_time(
+    trades: Any,
+    calendar: Iterable[Any],
+    night: Collection[str] | None = None,
+) -> Any:
+    """Stamp each fill with the wall-clock instant it effectively happened.
+
+    RQAlpha labels a daily-bar fill with ``00:00`` of the trading date.  A night-session
+    contract actually fills at the 21:00 open of the previous session, so that label hides
+    the fact that the fill happened the evening the signal was generated.
+    """
+
+    if trades is None:
+        return trades
+    frame = trades.copy() if isinstance(trades, pd.DataFrame) else pd.DataFrame(trades)
+    if frame.empty:
+        return frame
+    sessions = pd.DatetimeIndex(sorted({pd.Timestamp(value).normalize() for value in calendar}))
+    if sessions.empty:
+        return frame
+    position = {date: index for index, date in enumerate(sessions)}
+    column = "trading_datetime" if "trading_datetime" in frame.columns else "datetime"
+    trading_date = pd.to_datetime(frame[column]).dt.normalize()
+    previous = trading_date.map(
+        lambda date: sessions[position[date] - 1] if position.get(date, 0) > 0 else date
+    )
+    night_contracts = {
+        str(value).upper() for value in (night or set())
+    }
+    is_night = frame["order_book_id"].astype(str).map(lambda value: product_of(value) in night_contracts)
+    fill_date = previous.where(is_night, trading_date)
+    offset = pd.to_timedelta(is_night.map({True: NIGHT_SESSION_OPEN, False: DAY_SESSION_OPEN}))
+    frame["night_session"] = is_night.to_numpy()
+    frame[EXECUTION_TIME_COLUMN] = (fill_date + offset).dt.strftime("%Y-%m-%d %H:%M:%S")
+    return frame
+
+
 def run_native_account_dynamic(
     exposures: pd.DataFrame,
     config: NativeAccountConfig,
     *,
     tick_sizes: Mapping[str, float] | None = None,
+    night_products: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Replay capital-unit exposures, re-sizing every session off live equity."""
 
@@ -495,7 +562,7 @@ def run_native_account_dynamic(
     analyser = result.get("sys_analyser", {})
     return {
         "portfolio": analyser.get("portfolio"),
-        "trades": analyser.get("trades"),
+        "trades": annotate_execution_time(analyser.get("trades"), schedule, night_products),
         "summary": analyser.get("summary", {}),
         "unprocessed_dates": [date.date().isoformat() for date in unprocessed],
         "rqalpha_config": rqalpha_config,
@@ -538,6 +605,7 @@ def run_native_account(
     config: NativeAccountConfig,
     *,
     tick_sizes: Mapping[str, float] | None = None,
+    night_products: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Replay ``targets`` into an RQAlpha futures account and return its output."""
 
@@ -611,7 +679,7 @@ def run_native_account(
     analyser = result.get("sys_analyser", {})
     return {
         "portfolio": analyser.get("portfolio"),
-        "trades": analyser.get("trades"),
+        "trades": annotate_execution_time(analyser.get("trades"), schedule, night_products),
         "summary": analyser.get("summary", {}),
         "unprocessed_dates": [date.date().isoformat() for date in unprocessed],
         "rqalpha_config": rqalpha_config,

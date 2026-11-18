@@ -183,3 +183,33 @@ def test_attribute_pnl_reconciles_carry_and_trade_legs() -> None:
     # the sell of 6 lots is valued from that day's open 1020 up to 1025, minus a tick
     assert day3["pnl_carry"] == pytest.approx(1000.0)
     assert day3["pnl_trade"] == pytest.approx(-6 * 10 * (1025.0 - 1020.0) - 6 * 10 * 1.0)
+
+
+def test_annotate_execution_time_uses_the_previous_evening_for_night_contracts():
+    trades = pd.DataFrame(
+        {
+            "datetime": ["2024-01-03 00:00:00", "2024-01-03 00:00:00"],
+            "trading_datetime": ["2024-01-03 00:00:00", "2024-01-03 00:00:00"],
+            "order_book_id": ["AG2406", "JD2405"],
+        }
+    )
+    annotated = native.annotate_execution_time(
+        trades, ["2024-01-02", "2024-01-03"], {"AG"}
+    )
+    assert annotated["night_session"].tolist() == [True, False]
+    assert annotated.loc[0, "execution_time"] == "2024-01-02 21:00:00"
+    assert annotated.loc[1, "execution_time"] == "2024-01-03 09:00:00"
+
+
+def test_night_products_reads_the_first_trading_slot():
+    instruments = pd.DataFrame(
+        {
+            "product": ["AG", "JD"],
+            "trading_hours": [
+                "21:01-02:30,09:01-10:15",
+                "09:01-10:15,13:31-15:00",
+            ],
+        }
+    )
+    assert native.night_products(instruments) == {"AG"}
+    assert native.product_of("RB2410") == "RB"

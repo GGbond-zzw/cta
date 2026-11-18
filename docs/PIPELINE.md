@@ -136,8 +136,35 @@ checks. See [DATA.md](DATA.md).
 python scripts/70_native_backtest.py --start 2016-01-04 --end 2026-10-30
 ```
 
+### 追加挖掘因子（exported sleeves）
+
+`70_native_backtest.py` 也能把外部挖掘因子当作额外 sleeve 一起重放，因子清单写在
+`china_cta/factors/exported.py`（名称、导出目录、冻结方向/尺度、表达式）。三个已登记：
+
+| sleeve 名 | 来源 | 表达式 | 方向 |
+|---|---|---|---|
+| `crowded_trend_reversal_60d` | 原8号 / `mined_4a51bf38703a` | `-corr_60(mean_60(return_60), channel_position_20 × volatility_20)` | +1 |
+| `volume_oi_coflow_10d` | 原2号 / `mined_7dffc88fcdec` | `corr_10(volume_change, oi_surprise_20)` | +1 |
+| `volume_burst_vol_reversal_60d` | 本轮1号 / `mined_8eb423cac50b` | `-mean_60(corr_20(Δ20 volume_surprise_20, mean_60(volatility_ratio)))` | −1 |
+
+```bash
+python scripts/70_native_backtest.py \
+  --factors historical_skewness_252d,fixed_maturity_carry_90_180d,xsmom_252_21,oi_participation_trend_60d \
+  --extra-package <导出包目录> --extra-factors all \
+  --book-factors crowded_trend_reversal_60d,volume_oi_coflow_10d,volume_burst_vol_reversal_60d \
+  --start 2016-01-04 --end 2026-09-04 --out-dir results/final_7f_native_vol20
+```
+
+* `--extra-package`：导出包目录（含 `<folder>/signals.parquet` 与 `definition.json`）。
+* `--extra-factors`：`all`、`none` 或逗号分隔的 sleeve 名。
+* `--book-factors`：哪些 sleeve 需要单独回放成单因子账户，`all`/`none`/列表；组合账户总会跑。
+
+导出信号已经是 `clip(raw × direction ÷ scale, −1, 1)`、按信息日 T 记录，因此不再做方向或尺度变换；
+进入组合前会与项目 `universe` 做同样的 PIT 连接，品种范围因此保持在项目可定价的 30 个品种上
+（导出包本身覆盖 35 个，多的 BU/C/FU/HC/RM 会被剔除并打印）。
+
 产出目录 `results/final_4f_native_vol20/`：`daily_equity.csv`、`daily_equity_pass1.csv`、
-`trades.csv`（逐笔成交与手续费）、`target_positions.csv`、`daily_risk.csv`、
+`trades.csv`（逐笔成交与手续费，含 `night_session` 与 `execution_time` 两列）、`target_positions.csv`、`daily_risk.csv`、
 `vol_calibration.csv`、`segments.csv`、`segments_by_book.csv`、`by_year.csv`、
 `by_year_by_book.csv`、`by_instrument.csv`、`by_instrument_by_book.csv`、
 `attribution_reconciliation.csv`、`equity_comparison.png`。
