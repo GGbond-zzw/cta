@@ -31,6 +31,7 @@ sys.path.insert(0, str(PROJECT))
 
 from china_cta.research import bayesian_tuning as bt  # noqa: E402
 from china_cta.research.fast_backtest import run_fast_research_backtest  # noqa: E402
+from china_cta.factors import exported as exported_sleeves  # noqa: E402
 
 INPUT_DIR = PROJECT / "data" / "research_inputs" / "cta_alpha22"
 TUNED_DIR = PROJECT / "results" / "tuning" / "qualified4_300"
@@ -49,16 +50,14 @@ def _factor_names(tuned_dir: Path) -> list[str]:
     return list(manifest["factors"])
 
 
-def _one_factor(job: tuple[str, str]) -> dict[str, object]:
-    name, tuned_dir = job
+def _measure(
+    name: str, table: pd.DataFrame, *, params: dict[str, object], sharpe: float
+) -> dict[str, object]:
+    """Run one sleeve through the research engine and keep what the report needs."""
+
     assert _INPUTS is not None
-    payload = json.loads(
-        (Path(tuned_dir) / name / "best_params.json").read_text(encoding="utf-8")
-    )
-    params = payload["best_params"]
-    factor = bt.build_factor(name, params, _INPUTS)
     result = run_fast_research_backtest(
-        factor,
+        table,
         _INPUTS["continuous_prices"],
         _INPUTS["universe"],
         execution_lag=bt.EXECUTION_LAG,
@@ -75,7 +74,6 @@ def _one_factor(job: tuple[str, str]) -> dict[str, object]:
     pivot = signals.pivot_table(
         index="signal_date", columns="instrument", values="signal", aggfunc="mean"
     )
-    returns = detail.groupby("realization_date", sort=True)["net_signal_return"].mean()
     turnover = detail.groupby("signal_date", sort=True)["turnover_proxy"].mean()
     return {
         "name": name,
@@ -83,8 +81,32 @@ def _one_factor(job: tuple[str, str]) -> dict[str, object]:
         "daily": daily,
         "pivot": pivot,
         "turnover": float(turnover.mean()),
-        "sharpe": float(payload["best_train"]["sharpe"]),
+        "sharpe": float(sharpe),
     }
+
+
+def _one_tuned(name: str, tuned_dir: Path) -> dict[str, object]:
+    assert _INPUTS is not None
+    payload = json.loads(
+        (Path(tuned_dir) / name / "best_params.json").read_text(encoding="utf-8")
+    )
+    params = payload["best_params"]
+    factor = bt.build_factor(name, params, _INPUTS)
+    return _measure(name, factor, params=params, sharpe=payload["best_train"]["sharpe"])
+
+
+def _one_exported(name: str, package_dir: Path) -> dict[str, object]:
+    sleeve = exported_sleeves.resolve(name)[0]
+    table = exported_sleeves.load_signals(package_dir, sleeve)
+    frozen = {"signal_scale": sleeve.scale, "direction": sleeve.direction}
+    return _measure(name, table, params=frozen, sharpe=float("nan"))
+
+
+def _one_factor(job: tuple[str, str, str]) -> dict[str, object]:
+    kind, name, target = job
+    if kind == "exported":
+        return _one_exported(name, Path(target))
+    return _one_tuned(name, Path(target))
 
 
 def _rank_corr(a: np.ndarray, b: np.ndarray) -> float:
@@ -145,20 +167,42 @@ def main() -> int:
     parser.add_argument("--processes", type=int, default=3)
     parser.add_argument("--tuned-dir", type=Path, default=TUNED_DIR)
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
+    parser.add_argument(
+        "--extra-package",
+        action="append",
+        default=None,
+        help="directory of a frozen mined-signal export; repeat the flag to mix packages",
+    )
+    parser.add_argument(
+        "--extra-factors",
+        default="none",
+        help="comma separated exported sleeve names, or all/none",
+    )
     args = parser.parse_args()
 
     tuned_dir = Path(args.tuned_dir)
     names = _factor_names(tuned_dir)
-    print(f"factors: {names}", flush=True)
+    print(f"tuned factors: {names}", flush=True)
+
+    jobs: list[tuple[str, str, str]] = [("tuned", name, str(tuned_dir)) for name in names]
+    requested = (
+        exported_sleeves.resolve(args.extra_factors) if args.extra_package else ()
+    )
+    for sleeve, package_dir in exported_sleeves.locate(requested, args.extra_package):
+        exported_sleeves.validate_package(package_dir, (sleeve,))
+        jobs.append(("exported", sleeve.name, str(package_dir)))
+        print(f"exported sleeve: {sleeve.name} <- {package_dir} / {sleeve.folder}", flush=True)
 
     with ProcessPoolExecutor(
         max_workers=args.processes, initializer=_init_worker
     ) as pool:
         items = []
-        for item in pool.map(_one_factor, [(name, str(tuned_dir)) for name in names]):
+        for item in pool.map(_one_factor, jobs):
+            sharpe = item["sharpe"]
+            shown = "frozen" if not np.isfinite(sharpe) else f"{sharpe:.4f}"
             print(
-                f"built {item['name']:<32} days={len(item['daily']):<6} "
-                f"train_sharpe={item['sharpe']:.4f} turnover={item['turnover']:.4f}",
+                f"built {item['name']:<34} days={len(item['daily']):<6} "
+                f"train_sharpe={shown:<8} turnover={item['turnover']:.4f}",
                 flush=True,
             )
             items.append(item)
@@ -170,6 +214,35 @@ def main() -> int:
 
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
+
+    daily.to_csv(out / "sleeve_daily_returns.csv")
+    stats = pd.DataFrame(
+        {
+            "name": [item["name"] for item in items],
+            "turnover": [item["turnover"] for item in items],
+            "days": [len(item["daily"]) for item in items],
+        }
+    )
+    stats["ann_return"] = daily.mean() * 252
+    stats["ann_vol"] = daily.std(ddof=1) * np.sqrt(252)
+    stats["sharpe"] = stats["ann_return"] / stats["ann_vol"]
+    stats.to_csv(out / "sleeve_metrics.csv", index=False)
+
+    equal = daily.mean(axis=1)
+    combined = pd.DataFrame(
+        {
+            "days": [len(equal)],
+            "ann_return": [equal.mean() * 252],
+            "ann_vol": [equal.std(ddof=1) * np.sqrt(252)],
+        }
+    )
+    combined["sharpe"] = combined["ann_return"] / combined["ann_vol"]
+    combined.to_csv(out / "equal_weight_research.csv", index=False)
+    print(
+        f"\nequal-weight research check: sharpe={combined['sharpe'].iloc[0]:.4f} "
+        f"ann={combined['ann_return'].iloc[0]:.4f} vol={combined['ann_vol'].iloc[0]:.4f}",
+        flush=True,
+    )
 
     corr_10y = _corr_block(daily, "2016-01-01", "2025-12-31", 200)
     corr_2025 = _corr_block(daily, "2025-01-01", "2025-12-31", 60)
@@ -233,10 +306,11 @@ def main() -> int:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        labels = [f"{i}:{name[:16]}" for i, name in enumerate(names)]
+        labels = [f"{i}:{item['name']}" for i, item in enumerate(items)]
         signal_limit = float(np.nanmax(np.abs(signal.to_numpy(dtype=float))))
         signal_limit = max(0.4, np.ceil(signal_limit * 10) / 10)
-        fig, axes = plt.subplots(1, 3, figsize=(20, 6.4))
+        side = max(20.0, 2.6 * len(items))
+        fig, axes = plt.subplots(1, 3, figsize=(side, 0.55 * side + 2.0))
         panels = (
             ("Daily net return corr, 2016-2025", corr_10y, -1.0, 1.0),
             ("Daily net return corr, 2025", corr_2025, -1.0, 1.0),
@@ -251,8 +325,9 @@ def main() -> int:
             axis.set_xticks(range(len(labels)))
             axis.set_yticks(range(len(labels)))
             axis.set_xticklabels(range(len(labels)))
+            tick_font = max(5.0, 9.0 - 0.25 * len(labels))
             if position == 0:
-                axis.set_yticklabels(labels, fontsize=8)
+                axis.set_yticklabels(labels, fontsize=tick_font)
             else:
                 axis.set_yticklabels([])
             for i in range(len(labels)):
@@ -261,13 +336,13 @@ def main() -> int:
                     if np.isfinite(value):
                         colour = "white" if abs(value) > 0.55 * high else "black"
                         axis.text(j, i, f"{value:.2f}", ha="center", va="center",
-                                  fontsize=7, color=colour)
+                                  fontsize=max(5.0, 8.0 - 0.3 * len(labels)), color=colour)
         legend = "\n".join(labels)
-        fig.text(0.005, 0.5, legend, va="center", fontsize=8)
+        fig.text(0.005, 0.5, legend, va="center", fontsize=max(6.0, 9.0 - 0.2 * len(labels)))
         fig.subplots_adjust(left=0.20, right=0.88, top=0.88, bottom=0.12, wspace=0.18)
         fig.colorbar(image, ax=axes, shrink=0.7, pad=0.015)
         fig.suptitle(
-            f"CTA alpha22 factors: correlation matrices ({tuned_dir.name} optima)"
+            f"CTA sleeve correlation matrices ({len(items)} sleeves, {out.name})"
         )
         target = out / "correlation_matrices.png"
         try:

@@ -235,8 +235,9 @@ def main() -> None:
     parser.add_argument("--factors", default=",".join(DEFAULT_FACTORS))
     parser.add_argument(
         "--extra-package",
-        default="",
-        help="directory of a frozen mined-signal export (see china_cta.factors.exported)",
+        action="append",
+        default=None,
+        help="directory of a frozen mined-signal export; repeat the flag to mix packages (see china_cta.factors.exported)",
     )
     parser.add_argument(
         "--extra-factors",
@@ -283,20 +284,23 @@ def main() -> None:
     output = Path(args.out_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    exported: tuple[exported_sleeves.ExportedSleeve, ...] = ()
-    if args.extra_package:
-        exported = exported_sleeves.resolve(args.extra_factors)
-        exported_sleeves.validate_package(Path(args.extra_package), exported)
+    requested = exported_sleeves.resolve(args.extra_factors) if args.extra_package else ()
+    located = exported_sleeves.locate(requested, args.extra_package) if requested else ()
+    for sleeve, package_dir in located:
+        exported_sleeves.validate_package(package_dir, (sleeve,))
+    exported: tuple[exported_sleeves.ExportedSleeve, ...] = tuple(
+        sleeve for sleeve, _ in located
+    )
     print(f"building {len(factors)} tuned sleeves from {tuned_dir}")
     if exported:
-        print(f"appending {len(exported)} exported sleeves from {args.extra_package}")
-        for sleeve in exported:
-            print(f"  {sleeve.name:<34} <- {sleeve.folder} ({sleeve.source})")
+        print(f"appending {len(exported)} exported sleeves from {len(args.extra_package)} package(s)")
+        for sleeve, package_dir in located:
+            print(f"  {sleeve.name:<34} <- {package_dir} / {sleeve.folder} ({sleeve.source})")
     tasks: list[tuple[str, str, str]] = [
         ("tuned", name, str(tuned_dir)) for name in factors
     ]
     tasks += [
-        ("exported", sleeve.name, str(Path(args.extra_package))) for sleeve in exported
+        ("exported", sleeve.name, str(package_dir)) for sleeve, package_dir in located
     ]
     signals_by_sleeve: dict[str, pd.DataFrame] = {}
     daily_by_sleeve: dict[str, pd.Series] = {}
@@ -314,7 +318,7 @@ def main() -> None:
     meta: dict[str, Any] = {
         "sleeves": list(signals_by_sleeve),
         "sleeve_weights": dict(weights),
-        "exported_package": str(Path(args.extra_package)) if args.extra_package else "",
+        "exported_packages": [str(Path(item)) for item in (args.extra_package or [])],
         "exported_sleeves": [sleeve.as_dict() for sleeve in exported],
     }
 

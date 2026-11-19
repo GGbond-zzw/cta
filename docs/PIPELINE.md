@@ -180,3 +180,9 @@ python scripts/70_native_backtest.py \
 口径提醒：原生账户按合约级行情回放，止于本地 bundle 的最后交易日（2026-09-04）。
 保证金预算按**当日账户权益**的 50% 计算（`margin_basis="live_equity"`），实际占用
 26%–37%、上限从未被触及，实现波动 20.0%，与目标一致。
+
+### 多包混装（2026-11）
+
+`--extra-package` 可以重复：每个 sleeve 由 `china_cta.factors.exported.locate()` 分配到真正
+包含它的导出目录，因此“一轮三因子”和“二轮四因子”可以同时进场。`40_correlation_report.py`
+用同样的参数做混合组合的相关性分析。详见 `docs/EXPORTED_SLEEVES.md`。
