@@ -1,84 +1,66 @@
 # 挖掘因子（exported sleeves）
 
-手写四因子之外，项目还接收由表达式搜索（挖掘项目）产出的冻结信号。它们不是手写因子：
-搜索过程给出表达式、方向和尺度，导出包把信号冻结成 parquet，本仓库只负责登记与重放。
-
-目前登记了两轮导出的七个 sleeve，其中 `volume_oi_coflow_10d` 已退出组合（样本外为负、且没有
-可调维度），保留登记是为了历史结果可追溯。
+挖掘项目（另一个 checkout）用表达式搜索在价量仓特征上搜因子，拟合方向与尺度后把信号冻结成可移植的包。
+本仓库不重新拟合：`china_cta/factors/exported.py` 只保存定位与校验所需的元数据，把包目录当成第五种
+sleeve 来源。
 
 ## 登记表
 
-| sleeve 名 | 挖掘编号 | 轮次 | 导出目录 | 方向 | 尺度 | 一句话解释 |
-|---|---|---|---|---:|---:|---|
-| `crowded_trend_reversal_60d` | `mined_4a51bf38703a`（原8号） | 一轮 | `old_08` | +1 | 0.7073720289720415 | 趋势与“通道位置 × 波动”的 60 日相关性取负：趋势越被高波动/高位推动，越反向做 |
-| `volume_oi_coflow_10d` | `mined_7dffc88fcdec`（原2号） | 一轮 | `old_02` | +1 | 0.7148378264008488 | 成交量变化与持仓量超预期同向共振的 10 日相关性（已退出组合） |
-| `volume_burst_vol_reversal_60d` | `mined_8eb423cac50b`（上一轮1号） | 一轮 | `new_01_previous_round` | −1 | 0.3029101622490162 | 放量加速与波动放大（vol20/vol60）20 日相关性、再取 60 日均值后取负 |
-| `turnover_surprise_channel_ratio` | `mined_f0dd19ea2ff1`（本轮1号） | 二轮 | `current_01_turnover_surprise_channel_ratio` | +1 | 4.414286511620197 | 成交额相对前 20 日均值的偏离，除以收盘价在 20 日高低区间内的居中位置 |
-| `volume_channel_price_oi_volatility` | `mined_bdfbd7063550`（本轮6号） | 二轮 | `current_06_volume_channel_price_oi_volatility` | +1 | 5.3720659606008665 | 成交量五日变化与通道位置之比，加上价仓交互项 60 日差值的 5 日标准差 |
-| `inverse_oi_turnover_surprise_ratio` | `mined_cbe804196d96`（本轮8号） | 二轮 | `current_08_inverse_oi_turnover_surprise_ratio` | −1 | 3.13168742823665 | 持仓量异动除以成交额异动的 10 日均值，训练拟合方向为负 |
-| `volume_variability_weighted_reversal` | `mined_57002a2d5f10`（本轮20号） | 二轮 | `current_20_volume_variability_weighted_reversal` | −1 | 0.0007038049575569826 | 一日收益乘以成交量变化的 20 日标准差、再取 5 日标准差，拟合方向为负 |
+| sleeve | 包 | 目录 | 方向 | 尺度 | 状态 |
+| --- | --- | --- | ---: | ---: | --- |
+| `crowded_trend_reversal_60d` | `old-mined-20261116` | `old_08` | +1 | 0.7074 | 合格 |
+| `volume_burst_vol_reversal_60d` | `old-mined-20261116` | `new_01_previous_round` | −1 | 0.3029 | 合格 |
+| `turnover_surprise_channel_ratio` | `round2-20261119` | `current_01_turnover_surprise_channel_ratio` | +1 | 4.4143 | 合格 |
+| `inverse_oi_turnover_surprise_ratio` | `round2-20261119` | `current_08_inverse_oi_turnover_surprise_ratio` | −1 | 3.1317 | 合格 |
+| `volume_variability_weighted_reversal` | `round2-20261119` | `current_20_volume_variability_weighted_reversal` | −1 | 0.0007 | 合格 |
+| `volume_oi_coflow_10d` | `old-mined-20261116` | `old_02` | +1 | 0.7148 | 退役 |
+| `volume_channel_price_oi_volatility` | `round2-20261119` | `current_06_volume_channel_price_oi_volatility` | +1 | 5.3721 | 退役 |
+
+状态字段由 `ExportedSleeve.status` 携带，`classification.QUALIFIED_EXPORTED` 只取 `qualified` 的五条。
+两条退役 sleeve 保留在登记表里，保证历史结果可复现，但不进组合：
+
+* `volume_oi_coflow_10d`：研究层样本外（2022–2025）夏普 −0.27，唯一可调窗口的最优点仍然是 10，没有改进空间。
+* `volume_channel_price_oi_volatility`：与 `turnover_surprise_channel_ratio` 日收益相关 0.72（2025 年 0.80），
+  单腿原生账户 −0.08；删掉它只损失 0.03 夏普，却省下约两个点的摩擦。
 
 ## 命名规则
 
-`<测什么>_<窗口>`：
-
-* `crowded_trend` = 趋势被“高位 × 高波动”推动（拥挤），`reversal` = 方向取负；
-* `volume_oi_coflow` = 量仓同向流入；
-* `volume_burst_vol` = 放量叠加波动放大，`reversal` = 方向取负；
-* `turnover_surprise_channel_ratio` = 成交额异动 ÷ 通道位置；
-* `volume_channel_price_oi_volatility` = 量变/通道 + 价仓波动；
-* `inverse_oi_turnover_surprise_ratio` = 持仓异动 ÷ 成交额异动，取反；
-* `volume_variability_weighted_reversal` = 用量变波动加权的短期反转。
-
-数值后缀是表达式中最关键的窗口，与项目既有命名（`..._60d`、`..._252d`）一致。挖掘侧的中文
-标签保留在登记表“挖掘编号”列与 `exported.py` 的 `description` 字段里，两边可以互查。
+描述性前缀说明表达式在衡量什么，数字后缀是它最关键的那个窗口：`crowded_trend_reversal_60d` 的 60 是相关性窗口，
+`volume_oi_coflow_10d` 的 10 是唯一窗口，`turnover_surprise_channel_ratio` 没有可调窗口所以不带后缀。
 
 ## 多包混装
 
-一个组合可以同时使用多轮导出。`exported.py` 的 `locate()` 会把每个请求的 sleeve 分配到真正
-包含它的那个包目录，重复指定同一个包或找不到都会直接报错：
+`--extra-package` 可以重复给，`exported.locate()` 会为每条 sleeve 找真正持有它的那个目录，重复或缺失都会报错。
+`--extra-factors` 接受 `all`、`qualified`、`retired` 或逗号分隔的名字：
 
-```bash
+```
 python scripts/70_native_backtest.py \
   --factors historical_skewness_252d,fixed_maturity_carry_90_180d,xsmom_252_21,oi_participation_trend_60d \
-  --extra-package C:/Users/ct/Desktop/一轮三因子 \
-  --extra-package C:/Users/ct/Desktop/二轮四因子 \
-  --extra-factors crowded_trend_reversal_60d,volume_burst_vol_reversal_60d,turnover_surprise_channel_ratio,volume_channel_price_oi_volatility,inverse_oi_turnover_surprise_ratio,volume_variability_weighted_reversal \
-  --book-factors turnover_surprise_channel_ratio,volume_channel_price_oi_volatility,inverse_oi_turnover_surprise_ratio,volume_variability_weighted_reversal \
-  --out-dir results/final_10f_native
+  --extra-package <round-1-export> --extra-package <round-2-export> \
+  --extra-factors qualified --book-factors none \
+  --start 2016-01-04 --end 2026-09-04 --out-dir results/final_9f_native
 ```
-
-`scripts/40_correlation_report.py` 同样支持 `--extra-package` / `--extra-factors`，因此相关性
-分析可以覆盖“手写因子 + 挖掘因子”的混合组合。
 
 ## 数据契约
 
-`signals.parquet` 必需列：`trading_date`（信息日 T，收盘）、`instrument`（品种代码）、
-`raw_factor`、`signal`（已定向、已按 scale 缩放并截断到 [−1, 1]）、`factor_name`。
-`definition.json` 提供 `factor_name`（一轮导出用 `name`）、`fitted.direction`、`fitted.scale`、
-表达式树。
+每个 sleeve 目录需含 `signals.parquet`（列 `trading_date/instrument/raw_factor/signal/factor_name`）与
+`definition.json`（表达式树 + `fitted.direction/scale`）。`validate_package()` 会核对目录名、`factor_name`、
+方向与尺度；`load_signals()` 还会拒绝重复键、越界信号（|signal| > 1）与不可解析日期。
 
-`china_cta/factors/exported.py` 在加载时校验：
-
-1. 目录与 `signals.parquet` 存在；
-2. 必需列齐全、`(trading_date, instrument)` 不重复、`|signal| ≤ 1`；
-3. 若存在 `definition.json`，其编号、`direction`、`scale` 必须与登记表一致（防止导出包被换掉）。
+导出包的 `raw_factor` 可能已经含了方向，因此本仓库统一按“`raw_factor` 已定向，`signal = clip(raw_factor / scale, −1, 1)`”
+处理，与 `schema.make_factor_table` 一致。
 
 ## 与既有因子一起使用时
 
-* 组合权重等权（N 个 sleeve 各 1/N）；
-* 信号按信息日 T 记录，原生账户在 T+1 的开盘竞价成交（有夜盘品种即 T 日晚 21:00）；
-* 导出包覆盖 30 个品种（含项目未定价的 BU/C/FU/HC/RM），进入组合前与项目 `universe` 做同样的
-  PIT 连接，会打印被剔除的品种；
+* 导出包覆盖 30 个品种（含项目未定价的 BU/C/FU/HC/RM）；进入组合前与项目 `universe` 做同样的 PIT 连接，
+  并打印被剔除的品种。
 * 结果写进 `config.json` 的 `sleeves`、`sleeve_weights`、`exported_packages`、`exported_sleeves`。
 
-## 当前十腿组合
+## 最终组合：九条 sleeve
 
-四条手写 sleeve + 六条挖掘 sleeve（一轮两条、二轮四条），各 1/10。原生账户口径
-（5000 万本金、50% 保证金按实时权益、1 跳滑点、原生手续费）2016-01-04..2026-09-04：
-夏普 1.7293、年化 38.56%、波动 20.03%、最大回撤 −20.32%；三段训练 1.6783 / 验证 1.4040 /
-测试 2.3955。研究层等权（1bp）夏普 2.0108。
+四条手写 + 五条挖掘（一轮两条、二轮三条），各 1/9。原生账户口径（5000 万本金、50% 保证金按实时权益、
+1 跳滑点、原生手续费），2016-01-04..2026-09-04：夏普 1.7018、年化 37.79%、波动 20.02%、最大回撤 −20.18%，
+期末 26.08 倍；三段 训练 1.722 / 验证 1.387 / 测试 2.112。研究层等权（1bp）夏普 2.01。
 
-需要注意的是二轮四条 sleeve 的单腿原生账户表现接近零（0.06 / −0.03 / −0.08 / −0.38），
-它们靠与其余六条的低相关（均值 0.067）贡献组合夏普，而日均换手 0.21–0.37 也让摩擦占毛利
-升到 22.4%（七腿时为 13.5%）。
+同一账户下的对照：四腿 1.3498、六腿 1.5359、七腿 1.5674、九腿 1.7018、十腿 1.7293 —— 九腿比十腿少 0.03 夏普，
+但摩擦从 22.4% 降到 20.3%、回撤更浅，是成本与分散度之间的折中。

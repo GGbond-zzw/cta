@@ -242,7 +242,7 @@ def main() -> None:
     parser.add_argument(
         "--extra-factors",
         default="all",
-        help="comma separated exported sleeve names, or all/none",
+        help="comma separated exported sleeve names, or all/qualified/retired/none",
     )
     parser.add_argument(
         "--book-factors",

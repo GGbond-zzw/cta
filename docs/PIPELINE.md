@@ -14,7 +14,7 @@ four-sleeve book, so a stage can be re-run with no arguments.
 | 2 | `40_correlation_report.py` | stage 1 | `results/tuning/factor_correlation_4f/` |
 | 3 | `50_backtest_portfolio.py` | stage 0 + 1 | `results/final_4f/` |
 | 4 | `60_render_run_chart.py` | stage 3 | `comparison_equity.png` |
-| 5 | `70_native_backtest.py` | stage 0 + 1 | `results/final_4f_native_vol20/` |
+| 5 | `70_native_backtest.py` | stage 0 + 1 | `results/final_9f_native/` |
 | 6 | `15_select_liquid_universe.py` | RQData | liquidity screen artefacts |
 
 ## Stage 0 - research inputs
@@ -186,3 +186,12 @@ python scripts/70_native_backtest.py \
 `--extra-package` 可以重复：每个 sleeve 由 `china_cta.factors.exported.locate()` 分配到真正
 包含它的导出目录，因此“一轮三因子”和“二轮四因子”可以同时进场。`40_correlation_report.py`
 用同样的参数做混合组合的相关性分析。详见 `docs/EXPORTED_SLEEVES.md`。
+
+## Final book: nine sleeves
+
+The live book is nine equally weighted sleeves: the four package factors above plus the five
+qualified exported sleeves (`--extra-factors qualified`). Two further exported sleeves are
+retired and excluded from the book. On the native account (2016-01-04..2026-09-04) it prints
+Sharpe 1.7018 / annualised 37.79% / volatility 20.02% / max drawdown -20.18%, with
+train 1.722, validation 1.387 and test 2.112. See `docs/FACTOR_CLASSIFICATION.md` and
+`docs/EXPORTED_SLEEVES.md`.

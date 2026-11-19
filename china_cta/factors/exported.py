@@ -44,6 +44,7 @@ class ExportedSleeve:
     scale: float
     description: str
     expression: str
+    status: str = "qualified"
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -55,6 +56,7 @@ class ExportedSleeve:
             "scale": self.scale,
             "description": self.description,
             "expression": self.expression,
+            "status": self.status,
         }
 
 
@@ -88,6 +90,7 @@ EXPORTED_SLEEVES: dict[str, ExportedSleeve] = {
         scale=0.7148378264008488,
         description="原2号：成交量变化与持仓量超预期同向共振的 10 日相关性，正向做多。",
         expression="corr(volume_change, oi_surprise_20, 10)",
+        status="retired",
     ),
     "volume_burst_vol_reversal_60d": ExportedSleeve(
         name="volume_burst_vol_reversal_60d",
@@ -119,6 +122,7 @@ EXPORTED_SLEEVES: dict[str, ExportedSleeve] = {
         scale=5.3720659606008665,
         description="本轮6号：成交量五日变化与通道位置之比，加上价仓交互项 60 日差值的 5 日标准差。",
         expression="std(delta(price_oi_interaction, 60), 5) + volume_change / channel_position_20",
+        status="retired",
     ),
     "inverse_oi_turnover_surprise_ratio": ExportedSleeve(
         name="inverse_oi_turnover_surprise_ratio",
@@ -147,6 +151,15 @@ EXPORTED_PACKAGES: tuple[str, ...] = tuple(
     dict.fromkeys(sleeve.package for sleeve in EXPORTED_SLEEVES.values())
 )
 
+#: Sleeves that belong to the live nine-sleeve book.
+QUALIFIED_EXPORTED_SLEEVES: tuple[str, ...] = tuple(
+    name for name, sleeve in EXPORTED_SLEEVES.items() if sleeve.status == "qualified"
+)
+#: Sleeves kept in the registry for reproducibility but excluded from the live book.
+RETIRED_EXPORTED_SLEEVES: tuple[str, ...] = tuple(
+    name for name, sleeve in EXPORTED_SLEEVES.items() if sleeve.status == "retired"
+)
+
 
 def resolve(names: str | list[str] | tuple[str, ...]) -> tuple[ExportedSleeve, ...]:
     """Turn a comma separated list (or ``"all"``) into sleeves, rejecting unknown names."""
@@ -157,12 +170,22 @@ def resolve(names: str | list[str] | tuple[str, ...]) -> tuple[ExportedSleeve, .
         raw = [str(item).strip() for item in names if str(item).strip()]
     if not raw or raw == ["all"]:
         raw = list(EXPORTED_NAMES)
+    elif raw == ["qualified"]:
+        raw = list(QUALIFIED_EXPORTED_SLEEVES)
+    elif raw == ["retired"]:
+        raw = list(RETIRED_EXPORTED_SLEEVES)
     unknown = [item for item in raw if item not in EXPORTED_SLEEVES]
     if unknown:
         raise SystemExit(
             f"unknown exported sleeve(s): {unknown}; available: {', '.join(EXPORTED_NAMES)}"
         )
     return tuple(EXPORTED_SLEEVES[item] for item in raw)
+
+
+def qualified_sleeves() -> tuple[ExportedSleeve, ...]:
+    """The exported sleeves that the live book uses, in registry order."""
+
+    return tuple(EXPORTED_SLEEVES[name] for name in QUALIFIED_EXPORTED_SLEEVES)
 
 
 def locate(

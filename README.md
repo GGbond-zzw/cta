@@ -59,7 +59,8 @@ The full walk-through, including what each artifact means, is in
 ```
 china_cta/
   data/          RQData adapter, contract helpers, liquidity screen, bundle reader
-  factors/       factor contracts (schema.py) + qualified/ + unqualified/
+  factors/       factor contracts (schema.py), classification.py, exported.py,
+                 qualified/ + unqualified/
   research/      fast_backtest.py, bayesian_tuning.py, seasonality studies
   portfolio/     allocation and volatility helpers (Phase 5 semantics)
   formal_backtest/  native_account.py (RQAlpha account) + legacy RQAlpha Plus adapter
@@ -94,29 +95,65 @@ has been inspected repeatedly, so treat the 2025 figures as optimistic.
 `70_native_backtest.py` replays the book into an RQAlpha futures account
 (50M capital, 50% margin budget, integer lots, 1-tick slippage, native fees) and
 calibrates the research leverage once so realised volatility hits the 20% target:
-pass 1 comes out at 8.8% volatility, the calibration multiplies exposure by 2.27,
+pass 1 comes out at 15.9% volatility, the calibration multiplies exposure by 1.25,
 pass 2 reaches 20.0%. The margin budget is applied to the **live account equity**
 (50% of that day's equity, `margin_basis="live_equity"`), so exposure compounds with the
 book instead of shrinking against a frozen 50M base.
 
+The live book is nine sleeves, equally weighted (see
+[docs/FACTOR_CLASSIFICATION.md](docs/FACTOR_CLASSIFICATION.md)):
+
 | segment | Sharpe | annualised | volatility | max drawdown |
 | --- | --- | --- | --- | --- |
-| train 2016-01-04 .. 2021-12-31 | 1.91 | 42.4% | 19.5% | -18.9% |
-| validation 2022-01-04 .. 2024-12-31 | 0.40 | 5.9% | 19.0% | -27.5% |
-| test 2025-01-02 .. 2026-09-04 | 1.08 | 25.3% | 23.4% | -25.8% |
-| overall | 1.35 | 28.4% | 20.0% | -27.5% |
+| train 2016-01-04 .. 2021-12-31 | 1.72 | 38.9% | 20.3% | -20.2% |
+| validation 2022-01-04 .. 2024-12-31 | 1.39 | 27.2% | 18.6% | -13.1% |
+| test 2025-01-02 .. 2026-09-04 | 2.11 | 54.0% | 21.6% | -19.1% |
+| overall | 1.70 | 37.8% | 20.0% | -20.2% |
 
-Trading friction over the full window: 23.8M commission and 77.1M one-tick
-slippage, 100.9M in total, i.e. 14.3% of gross P&L — about 5% of average equity
-per year, because the exposure now compounds with the book.
+Ending equity is 26.1x the 50M base over 2,593 trading days. The same account on the
+four-sleeve book prints 1.35 Sharpe / 28.4% annualised / -27.5% drawdown, so the five
+mined sleeves add about 0.35 of Sharpe at the cost of roughly six points of friction.
+
+Trading friction over the full window: 77.6M commission and 255.4M one-tick
+slippage, 333.0M in total, i.e. 20.3% of gross P&L - about 6% of average equity
+per year, because the exposure now compounds with the book. Turnover, not leverage,
+is what the last point of that number is bought with: the four package sleeves trade
+0.01-0.10 of notional per day, the five mined sleeves 0.21-0.37.
 The native account needs contract-level bars from a local RQAlpha bundle, so it
 stops at the bundle's last trading day (2026-09-04) rather than at the research
 inputs' last day.
 
-Sleeves mined by the expression search can join the same account through
-`--extra-package/--extra-factors`; the registry and naming rules are in
-[docs/EXPORTED_SLEEVES.md](docs/EXPORTED_SLEEVES.md). A seven-sleeve book runs as
-`--book-factors none -out-dir results/final_7f_native_vol20`.
+Sleeves mined by the expression search join the same account through
+`--extra-package/--extra-factors`; the registry, naming rules and data contract are in
+[docs/EXPORTED_SLEEVES.md](docs/EXPORTED_SLEEVES.md). `--extra-factors qualified`
+selects the five that belong to the book, and the nine-sleeve run is:
+
+```
+python scripts/70_native_backtest.py \
+  --factors historical_skewness_252d,fixed_maturity_carry_90_180d,xsmom_252_21,oi_participation_trend_60d \
+  --extra-package <round-1-export> --extra-package <round-2-export> \
+  --extra-factors qualified --book-factors none \
+  --start 2016-01-04 --end 2026-09-04 --out-dir results/final_9f_native
+```
+
+## Qualified sleeves
+
+Nine sleeves are qualified, registered in `china_cta/factors/classification.py`:
+
+```python
+from china_cta.factors import classification
+
+classification.QUALIFIED_SLEEVE_COUNT   # 9
+classification.qualified_sleeve_names() # the book, package sleeves first
+```
+
+Four are written in this package (`factors/qualified/`), five are mined expressions
+exported as frozen signals (`factors/exported.py`). Two further mined sleeves are kept
+as `retired` so old runs stay reproducible, but they are not traded:
+`volume_oi_coflow_10d` (negative out-of-sample Sharpe) and
+`volume_channel_price_oi_volatility` (0.72 correlated with
+`turnover_surprise_channel_ratio`). Everything else is research material in
+`factors/unqualified/` or `scripts/research/`.
 
 ## Environment notes
 
