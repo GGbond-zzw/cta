@@ -8,7 +8,6 @@ from china_cta.factors.mined.sleeves import (
     build_mined_factor,
     compute_crowded_trend_reversal_factor,
     compute_volume_burst_vol_reversal_factor,
-    compute_volume_oi_coflow_factor,
 )
 
 __all__ = [
@@ -17,5 +16,4 @@ __all__ = [
     "build_mined_factor",
     "compute_crowded_trend_reversal_factor",
     "compute_volume_burst_vol_reversal_factor",
-    "compute_volume_oi_coflow_factor",
 ]

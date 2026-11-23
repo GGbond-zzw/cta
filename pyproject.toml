@@ -21,6 +21,7 @@ dependencies = [
 [project.optional-dependencies]
 research = ["jupyter==1.1.1"]
 test = ["pytest==9.0.3"]
+transformer = ["torch>=2.6,<3"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -32,3 +33,6 @@ markers = [
 
 [tool.setuptools.packages.find]
 include = ["china_cta*"]
+
+[tool.setuptools.package-data]
+china_cta = ["factors/qualified/*/*.json", "factors/qualified/*/*.md", "factors/qualified/reg35_transformer/assets/reg35_transformer/*.pt", "factors/qualified/reg35_transformer/assets/reg35_transformer/*.json", "factors/qualified/OWN_FACTORS_README.md"]

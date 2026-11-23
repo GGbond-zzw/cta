@@ -6,6 +6,7 @@ import pytest
 from china_cta.data.fixed_universe import load_fixed_product_pool
 
 
+@pytest.mark.integration
 def test_current_fixed_pool_has_thirty_unique_products():
     pool = load_fixed_product_pool()
     assert pool.holding_month == "2026-09"

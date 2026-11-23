@@ -1,0 +1,9 @@
+{
+  "name": "volume_burst_vol_reversal_60d",
+  "folder": "new_01_previous_round",
+  "source": "mined_8eb423cac50b",
+  "direction": -1,
+  "scale": 0.3029101622490162,
+  "description": "上一轮1号：放量加速与波动放大（vol20/vol60）的 20 日相关性，再取 60 日均值后取负。",
+  "expression": "mul(-1, mean(corr(delta(volume_surprise_20, 20), mean(volatility_ratio, 60), 20), 60))"
+}

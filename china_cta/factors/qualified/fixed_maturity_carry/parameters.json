@@ -1,0 +1,10 @@
+{
+  "parameter_source": "function defaults;not historical tuned optimum",
+  "parameters": {
+    "near_days": 90,
+    "far_days": 180,
+    "min_days_to_maturity": 30,
+    "max_gap_days": 120,
+    "signal_scale": 0.2
+  }
+}

@@ -126,41 +126,6 @@ def compute_crowded_trend_reversal_factor(
     return table
 
 
-def compute_volume_oi_coflow_factor(
-    prices: pd.DataFrame,
-    universe: pd.DataFrame,
-    *,
-    product_flows: pd.DataFrame | None = None,
-    correlation_window: int = 10,
-    direction: int = 1,
-    signal_scale: float = 0.7148378264008488,
-) -> pd.DataFrame:
-    """Correlation of volume change with the 20-day open-interest surprise."""
-
-    features = _features(prices, product_flows)
-    expression = {
-        "op": "corr",
-        "args": [feature_node("volume_change"), feature_node("oi_surprise_20")],
-        "window": int(correlation_window),
-    }
-    values = evaluate(expression, features) * float(direction)
-    table = make_factor_table(
-        to_long(values, factor_name="volume_oi_coflow"),
-        universe,
-        factor_name="volume_oi_coflow",
-        signal_scale=signal_scale,
-    )
-    table.attrs.update(
-        {
-            "definition": "corr(correlation_window)(volume_change, oi_surprise_20)",
-            "direction": "long_volume_and_open_interest_coflow",
-            "correlation_window": int(correlation_window),
-            "price_field": "close",
-            "adjust_method": "prev_close_ratio",
-            "raw_factor_normalization": "none",
-        }
-    )
-    return table
 
 
 def compute_volume_burst_vol_reversal_factor(
@@ -240,18 +205,6 @@ MINED_SLEEVES: Final[dict[str, MinedSleeve]] = {
         },
         window_parameters=("trend_window", "correlation_window"),
         note="fades trends that are pushed by high channel position and high volatility",
-    ),
-    "volume_oi_coflow_10d": MinedSleeve(
-        name="volume_oi_coflow_10d",
-        label="原2号",
-        compute=compute_volume_oi_coflow_factor,
-        baseline={
-            "correlation_window": 10,
-            "direction": 1,
-            "signal_scale": 0.7148378264008488,
-        },
-        window_parameters=("correlation_window",),
-        note="volume change and open-interest surprise moving together",
     ),
     "volume_burst_vol_reversal_60d": MinedSleeve(
         name="volume_burst_vol_reversal_60d",

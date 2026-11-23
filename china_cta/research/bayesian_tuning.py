@@ -45,7 +45,6 @@ from china_cta.research.fast_backtest import run_fast_research_backtest
 
 MINED_TUNING_FACTORS: tuple[str, ...] = (
     "crowded_trend_reversal_60d",
-    "volume_oi_coflow_10d",
     "volume_burst_vol_reversal_60d",
 )
 
@@ -402,14 +401,6 @@ TUNING_SPECS: dict[str, TuningSpec] = {
         resolve=_resolve_identity,
         fixed={"signal_scale": 0.7073720289720415},
     ),
-    "volume_oi_coflow_10d": TuningSpec(
-        name="volume_oi_coflow_10d",
-        description="mined: correlation of volume change with the OI surprise",
-        baseline={"correlation_window": 10, "signal_scale": 0.7148378264008488},
-        suggest=_suggest_volume_coflow,
-        resolve=_resolve_identity,
-        fixed={"signal_scale": 0.7148378264008488},
-    ),
     "volume_burst_vol_reversal_60d": TuningSpec(
         name="volume_burst_vol_reversal_60d",
         description="mined: fade volume bursts that arrive while volatility expands",
@@ -443,7 +434,6 @@ SCALE_RANGES: dict[str, tuple[float, float]] = {
     "oi_participation_trend_60d": (0.10, 1.0),
     "historical_skewness_252d": (0.5, 1.0),
     "crowded_trend_reversal_60d": (0.30, 1.50),
-    "volume_oi_coflow_10d": (0.30, 1.50),
     "volume_burst_vol_reversal_60d": (0.10, 0.60),
 }
 

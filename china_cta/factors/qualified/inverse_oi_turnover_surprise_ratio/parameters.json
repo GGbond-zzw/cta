@@ -1,0 +1,9 @@
+{
+  "name": "inverse_oi_turnover_surprise_ratio",
+  "folder": "current_08_inverse_oi_turnover_surprise_ratio",
+  "source": "mined_cbe804196d96",
+  "direction": -1,
+  "scale": 3.13168742823665,
+  "description": "本轮8号：持仓量异动除以成交额异动的 10 日均值，训练拟合方向为负。",
+  "expression": "oi_surprise_20 / mean(turnover_surprise_20, 10)"
+}

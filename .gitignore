@@ -2,6 +2,12 @@
 .venv/
 .conda/
 .conda-env/
+.conda-pkgs/
+/runtime_d/
+/tmp/
+/build/
+/dist/
+*.egg-info/
 env/
 conda-meta/
 __pycache__/

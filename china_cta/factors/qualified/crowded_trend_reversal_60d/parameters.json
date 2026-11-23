@@ -1,0 +1,9 @@
+{
+  "name": "crowded_trend_reversal_60d",
+  "folder": "old_08",
+  "source": "mined_4a51bf38703a",
+  "direction": 1,
+  "scale": 0.7073720289720415,
+  "description": "原8号：趋势与“通道位置×波动”的 60 日相关性取负，趋势若被高波动/高位推动则反向。",
+  "expression": "neg(corr(mean(return_60, 60), mul(channel_position_20, volatility_20), 60))"
+}

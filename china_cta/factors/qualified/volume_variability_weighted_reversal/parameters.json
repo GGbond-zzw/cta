@@ -1,0 +1,9 @@
+{
+  "name": "volume_variability_weighted_reversal",
+  "folder": "current_20_volume_variability_weighted_reversal",
+  "source": "mined_57002a2d5f10",
+  "direction": -1,
+  "scale": 0.0007038049575569826,
+  "description": "本轮20号：一日收益乘以成交量变化的 20 日标准差、再取 5 日标准差，拟合方向为负。",
+  "expression": "return_1 * std(std(volume_change, 20), 5)"
+}

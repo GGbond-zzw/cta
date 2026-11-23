@@ -1,0 +1,46 @@
+[
+  {
+    "name": "fixed_maturity_carry_90_180d",
+    "folder": "fixed_maturity_carry"
+  },
+  {
+    "name": "historical_skewness_252d",
+    "folder": "historical_skewness"
+  },
+  {
+    "name": "oi_participation_trend_60d",
+    "folder": "oi_participation_trend"
+  },
+  {
+    "name": "xsmom_252_21",
+    "folder": "xsmom_252_21"
+  },
+  {
+    "name": "our_close_carry_smooth5",
+    "folder": "smoothed_close_carry"
+  },
+  {
+    "name": "our_reg35_transformer",
+    "folder": "reg35_transformer"
+  },
+  {
+    "name": "crowded_trend_reversal_60d",
+    "folder": "crowded_trend_reversal_60d"
+  },
+  {
+    "name": "volume_burst_vol_reversal_60d",
+    "folder": "volume_burst_vol_reversal_60d"
+  },
+  {
+    "name": "turnover_surprise_channel_ratio",
+    "folder": "turnover_surprise_channel_ratio"
+  },
+  {
+    "name": "inverse_oi_turnover_surprise_ratio",
+    "folder": "inverse_oi_turnover_surprise_ratio"
+  },
+  {
+    "name": "volume_variability_weighted_reversal",
+    "folder": "volume_variability_weighted_reversal"
+  }
+]

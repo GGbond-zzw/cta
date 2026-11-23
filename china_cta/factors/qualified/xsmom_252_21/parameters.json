@@ -1,0 +1,6 @@
+{
+  "lookback": 252,
+  "skip": 21,
+  "signal_scale": 1,
+  "parameter_source": "original build defaults"
+}

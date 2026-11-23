@@ -1,0 +1,5 @@
+{
+  "name": "our_reg35_transformer",
+  "parameters": "original function defaults;historical tuned settings supplied separately",
+  "model_manifest": "assets/reg35_transformer/manifest.json"
+}

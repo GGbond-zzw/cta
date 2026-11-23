@@ -1,0 +1,9 @@
+{
+  "name": "turnover_surprise_channel_ratio",
+  "folder": "current_01_turnover_surprise_channel_ratio",
+  "source": "mined_f0dd19ea2ff1",
+  "direction": 1,
+  "scale": 4.414286511620197,
+  "description": "本轮1号：成交额相对前 20 日均值的偏离，除以收盘价在 20 日高低区间内的居中位置。",
+  "expression": "turnover_surprise_20 / channel_position_20"
+}

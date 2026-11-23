@@ -1,172 +1,40 @@
-# china-cta
+# CTA 十一因子研究与回测
 
-A reproducible CTA research framework for Chinese commodity futures: factor
-construction, Bayesian parameter tuning on a strict in-sample window, factor
-correlation analysis, and a portfolio backtest with next-open execution and
-explicit trading costs.
+仅保留当前十一项因子，全部位于china_cta/factors/qualified/，每个因子独立文件夹，包含factor.py、__init__.py、parameters.json、README.md。
 
-The qualified book is **four sleeves**, all validated on the same conventions:
+|目录|因子|
+|---|---|
+|fixed_maturity_carry|固定期限Carry|
+|historical_skewness|历史偏度|
+|oi_participation_trend|持仓参与趋势|
+|xsmom_252_21|横截面动量|
+|crowded_trend_reversal_60d|拥挤趋势反转|
+|volume_burst_vol_reversal_60d|放量波动反转|
+|turnover_surprise_channel_ratio|成交额意外通道比|
+|inverse_oi_turnover_surprise_ratio|持仓成交额意外反比|
+|volume_variability_weighted_reversal|成交量变异加权反转|
+|smoothed_close_carry|五日平滑收盘Carry|
+|reg35_transformer|正则Transformer|
 
-| sleeve | module | role |
-| --- | --- | --- |
-| `fixed_maturity_carry_90_180d` | `china_cta/factors/qualified/fixed_maturity_carry.py` | term-structure carry on a fixed maturity pair |
-| `xsmom_252_21` | `china_cta/factors/qualified/xsmom_252_21.py` | cross-sectional momentum |
-| `oi_participation_trend_60d` | `china_cta/factors/qualified/oi_participation_trend.py` | trend gated by open-interest participation |
-| `historical_skewness_252d` | `china_cta/factors/qualified/historical_skewness.py` | cross-sectional skewness rank |
+统一注册入口：`from china_cta.factors.qualified import BUILDERS`，调用`BUILDERS[name](inputs)`。
+目录对应见[完整清单](docs/eleven_factor_layout.json)。输入合同见[自有因子说明](china_cta/factors/qualified/OWN_FACTORS_README.md)。
 
-Everything else in `china_cta/factors/unqualified/` is kept for research but is
-**not** part of the book: see [docs/FACTOR_CLASSIFICATION.md](docs/FACTOR_CLASSIFICATION.md).
+## 安装和生成信号
 
-## Execution conventions
+Python3.11，`pip install -e .`；Transformer选装：`pip install -e ".[transformer]"`。
 
-* Signals are computed on the close of day `t`.
-* Positions are filled at the **open of day `t+1`** and rolled at the open of `t+2`
-  (`china_cta/research/fast_backtest.py`, `execution_price_field="open"`).
-* Daily return of a sleeve = equal-weight mean of `signal * forward_return` across
-  eligible instruments; `net = gross - 1bp * turnover`.
-* No leverage and no volatility targeting by default; `50_backtest_portfolio.py`
-  can apply a trailing realised-volatility target (`--vol-target`).
+`python scripts/25_build_eleven_factors.py --input-dir path/to/inputs --out-dir results/eleven_signals`
 
-## Quick start
+输入目录需有continuous_prices.parquet、contract_snapshots.parquet、dominant_map.parquet、universe.parquet；聚合量仓挖掘因子还应提供product_flows.parquet。不要提交行情、bundle、凭据或环境。
 
-```bash
-conda env create -f environment.yml        # or: pip install -e .
-python scripts/10_fetch_research_inputs.py  # RQData -> data/research_inputs/cta_alpha22
-python scripts/12_add_open_from_bundle.py    # add the open column the engine fills on
-python scripts/30_tune_factors.py --trials 60
-python scripts/31_tune_factors_by_process.py --trials 300 --processes 3
-python scripts/32_verify_tuning_outputs.py
-python scripts/40_correlation_report.py
-python scripts/41_correlation_report_7f.py --package-dir <exported_factor_package>   # optional: 7-factor correlation
-python scripts/42_backtest_7f_equal.py --package-dir <exported_factor_package>      # optional: 7-factor equal-weight book
-python scripts/50_backtest_portfolio.py --vol-target 0.0
-python scripts/50_backtest_portfolio.py --vol-target 0.2 --run-name equal_weight_4f
-python scripts/60_render_run_chart.py
-python scripts/70_native_backtest.py --start 2016-01-04 --end 2026-10-30
-```
+四个原手写因子保留原默认参数，历史调优数值须显式配置，不能把默认计算误认为历史最佳参数的精确复现。五个挖掘因子可直接重建，冻结公式、方向和尺度见各自parameters.json。Transformer三份冻结权重已随目录保存于reg35_transformer/assets/reg35_transformer，无需重新训练；79原始特征加79缺失标志，60日序列。
 
-Stage `50` is the research-layer book (continuous exposure, 1bp turnover cost).
-Stage `70` replays the same signals into an **RQAlpha native futures account**
-(50M capital, 50% margin budget, integer lots, 25% volume cap, one-tick slippage,
-native per-fill commissions) and is the result layer to quote. Conventions are
-documented in [docs/NATIVE_ACCOUNT_SPEC.md](docs/NATIVE_ACCOUNT_SPEC.md).
+## 测试和边界
 
-The full walk-through, including what each artifact means, is in
-[docs/PIPELINE.md](docs/PIPELINE.md).
+`python -m pytest tests -m "not integration and not formal" -q`
 
-## Layout
+集成/正式回测另需本地数据及权限。所有因子返回标准五列。信号在收盘及真实输入可得后生成，最早下一交易日首时段开盘执行（含夜盘）。分数不是手数，账户、风控、费用由原流程处理。新增脚本只生成信号，不自动启动十一因子账户。
 
-```
-china_cta/
-  data/          RQData adapter, contract helpers, liquidity screen, bundle reader
-  factors/       factor contracts (schema.py), classification.py, exported.py,
-                 qualified/ + unqualified/
-  research/      fast_backtest.py, bayesian_tuning.py, seasonality studies
-  portfolio/     allocation and volatility helpers (Phase 5 semantics)
-  formal_backtest/  native_account.py (RQAlpha account) + legacy RQAlpha Plus adapter
-  validation/    reconciliation helpers
-scripts/
-  10..70         the numbered research pipeline
-  research/      historical studies kept for reference (not part of the book)
-docs/            pipeline, data, factor classification, research notes
-changes/         one directory per repository-wide change, with a file-level record
-tests/           pytest suite (qualified/unqualified factors, engine, tuning)
-```
+qualified是接入分类，不是统计显著或实盘批准。历史多段测试已查看；2026固定池回看历史存在事后选样；Transformer2016—2021为训练回放；原同事全精度参数及导出快照缺失。请保留这些复现边界。
 
-## Verified numbers
-
-Four-sleeve equal-weight book, next-open fills, 1bp per unit turnover:
-
-| window | Sharpe | annualised | volatility | max drawdown |
-| --- | --- | --- | --- | --- |
-| 2016-01-04 .. 2025-12-31 | 1.49 | 3.95% | 2.66% | -4.45% |
-| 2025 only | 1.64 | 5.11% | 3.11% | -3.71% |
-
-With a 20% trailing volatility target (60-day window, 10x leverage cap) the same
-book reaches a 1.58 Sharpe over 2016-2025 (29.9% annualised, 19.3% volatility,
--22.9% max drawdown). 2026-01-05 .. 2026-09-04, rebuilt from a local RQAlpha
-bundle, gives 0.84 unlevered and 1.12 at 20% volatility.
-
-These are research results on an in-sample-tuned book; the out-of-sample window
-has been inspected repeatedly, so treat the 2025 figures as optimistic.
-
-## Native account result layer
-
-`70_native_backtest.py` replays the book into an RQAlpha futures account
-(50M capital, 50% margin budget, integer lots, 1-tick slippage, native fees) and
-calibrates the research leverage once so realised volatility hits the 20% target:
-pass 1 comes out at 15.9% volatility, the calibration multiplies exposure by 1.25,
-pass 2 reaches 20.0%. The margin budget is applied to the **live account equity**
-(50% of that day's equity, `margin_basis="live_equity"`), so exposure compounds with the
-book instead of shrinking against a frozen 50M base.
-
-The live book is nine sleeves, equally weighted (see
-[docs/FACTOR_CLASSIFICATION.md](docs/FACTOR_CLASSIFICATION.md)):
-
-| segment | Sharpe | annualised | volatility | max drawdown |
-| --- | --- | --- | --- | --- |
-| train 2016-01-04 .. 2021-12-31 | 1.72 | 38.9% | 20.3% | -20.2% |
-| validation 2022-01-04 .. 2024-12-31 | 1.39 | 27.2% | 18.6% | -13.1% |
-| test 2025-01-02 .. 2026-09-04 | 2.11 | 54.0% | 21.6% | -19.1% |
-| overall | 1.70 | 37.8% | 20.0% | -20.2% |
-
-Ending equity is 26.1x the 50M base over 2,593 trading days. The same account on the
-four-sleeve book prints 1.35 Sharpe / 28.4% annualised / -27.5% drawdown, so the five
-mined sleeves add about 0.35 of Sharpe at the cost of roughly six points of friction.
-
-Trading friction over the full window: 77.6M commission and 255.4M one-tick
-slippage, 333.0M in total, i.e. 20.3% of gross P&L - about 6% of average equity
-per year, because the exposure now compounds with the book. Turnover, not leverage,
-is what the last point of that number is bought with: the four package sleeves trade
-0.01-0.10 of notional per day, the five mined sleeves 0.21-0.37.
-The native account needs contract-level bars from a local RQAlpha bundle, so it
-stops at the bundle's last trading day (2026-09-04) rather than at the research
-inputs' last day.
-
-Sleeves mined by the expression search join the same account through
-`--extra-package/--extra-factors`; the registry, naming rules and data contract are in
-[docs/EXPORTED_SLEEVES.md](docs/EXPORTED_SLEEVES.md). `--extra-factors qualified`
-selects the five that belong to the book, and the nine-sleeve run is:
-
-```
-python scripts/70_native_backtest.py \
-  --factors historical_skewness_252d,fixed_maturity_carry_90_180d,xsmom_252_21,oi_participation_trend_60d \
-  --extra-package <round-1-export> --extra-package <round-2-export> \
-  --extra-factors qualified --book-factors none \
-  --start 2016-01-04 --end 2026-09-04 --out-dir results/final_9f_native
-```
-
-## Qualified sleeves
-
-Nine sleeves are qualified, registered in `china_cta/factors/classification.py`:
-
-```python
-from china_cta.factors import classification
-
-classification.QUALIFIED_SLEEVE_COUNT   # 9
-classification.qualified_sleeve_names() # the book, package sleeves first
-```
-
-Four are written in this package (`factors/qualified/`), five are mined expressions
-exported as frozen signals (`factors/exported.py`). Two further mined sleeves are kept
-as `retired` so old runs stay reproducible, but they are not traded:
-`volume_oi_coflow_10d` (negative out-of-sample Sharpe) and
-`volume_channel_price_oi_volatility` (0.72 correlated with
-`turnover_surprise_channel_ratio`). Everything else is research material in
-`factors/unqualified/` or `scripts/research/`.
-
-## Environment notes
-
-* `rqdatac` is required by `10_fetch_research_inputs.py`; on locked-down Windows
-  hosts it is blocked by the application control policy. Use
-  `20_rebuild_inputs_from_bundle.py` with a local RQAlpha bundle as the fallback
-  (see [docs/DATA.md](docs/DATA.md)).
-* `12_add_open_from_bundle.py` needs the same local bundle: it is the fallback
-  for filling `open` when stage 0 could not request it from RQData.
-* On hosts with Smart App Control enabled, stage 0 (`rqdatac`) is blocked by
-  code-integrity policy; run it from WSL2 instead, see
-  [docs/LINUX_SETUP.md](docs/LINUX_SETUP.md).
-* `rqalpha_plus` is only needed by the legacy `china_cta/formal_backtest/adapter.py`
-  (kept for reference); the native result layer uses plain `rqalpha` 6.x, which is
-  pure Python, so it runs even where the `rqalpha_plus` native modules are blocked.
-* `pandas` is used without `pytables`, so the bundle is read through `h5py`.
+已移除unqualified、旧scripts/research、changes及直接依赖已删除因子的旧测试。公共数学、表达式算子、数据层、风控和账户引擎保留。清理记录见[docs/CLEANUP.md](docs/CLEANUP.md)，完整备份保存在仓库外。

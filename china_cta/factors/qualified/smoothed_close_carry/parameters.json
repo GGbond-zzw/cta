@@ -1,0 +1,8 @@
+{
+  "parameter_source": "function defaults;not historical tuned optimum",
+  "parameters": {
+    "smoothing_sessions": 5,
+    "signal_scale": 0.05,
+    "deadband": 0.05
+  }
+}
