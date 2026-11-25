@@ -69,7 +69,7 @@ Next steps (inside WSL, from the repository root):
 
   3. On the Windows side, re-run the pipeline:
 
-     C:\Users\ct\miniconda3\envs\cta\python.exe scripts\50_backtest_portfolio.py \
+     <conda-env-python> scripts\50_backtest_portfolio.py \
          --start 2025-01-01 --end 2026-10-31 --vol-target 0.2 --run-name equal_weight_4f
 
 MSG

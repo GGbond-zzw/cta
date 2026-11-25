@@ -1,2 +1,2 @@
-"""Public compatibility interface for xsmom_252_21."""
+"""xsmom_252_21 as a stand-alone qualified factor package."""
 from .factor import *

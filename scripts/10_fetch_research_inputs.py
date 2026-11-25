@@ -24,11 +24,10 @@ from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "research"))  # shared loaders
-from basis_momentum_test import load_contract_history
 from china_cta.data.contracts import (
     get_research_universe,
     get_signal_continuous_price,
+    load_contract_history,
 )
 from china_cta.data.fixed_universe import DEFAULT_FIXED_POOL_FILE, load_fixed_product_pool
 from china_cta.data.rqdata_adapter import RQDataAdapter, RQDataConfig

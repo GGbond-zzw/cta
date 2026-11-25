@@ -1,9 +1,13 @@
 {
   "name": "volume_variability_weighted_reversal",
-  "folder": "current_20_volume_variability_weighted_reversal",
-  "source": "mined_57002a2d5f10",
+  "expression": "return_1 × std_5(std_20(volume_change))，方向 −1",
   "direction": -1,
   "scale": 0.0007038049575569826,
-  "description": "本轮20号：一日收益乘以成交量变化的 20 日标准差、再取 5 日标准差，拟合方向为负。",
-  "expression": "return_1 * std(std(volume_change, 20), 5)"
+  "VOLUME_STD_WINDOW": 20,
+  "SMOOTHING_WINDOW": 5,
+  "parameter_source": "mining run; signal carried to keep the reported book reproducible",
+  "signal_source": "shipped with the package (see README)",
+  "signal_file": "signals.parquet",
+  "signal_rows": 78630,
+  "signal_sha256": "73f1a86a1d10fd82e73dd00a732a0542aee46684b36adf0fec3180db86dc03c7"
 }

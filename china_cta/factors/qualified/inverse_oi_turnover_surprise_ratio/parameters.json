@@ -1,9 +1,13 @@
 {
   "name": "inverse_oi_turnover_surprise_ratio",
-  "folder": "current_08_inverse_oi_turnover_surprise_ratio",
-  "source": "mined_cbe804196d96",
+  "expression": "oi_surprise_20 / mean_10(turnover_surprise_20)，方向 −1",
   "direction": -1,
   "scale": 3.13168742823665,
-  "description": "本轮8号：持仓量异动除以成交额异动的 10 日均值，训练拟合方向为负。",
-  "expression": "oi_surprise_20 / mean(turnover_surprise_20, 10)"
+  "SURPRISE_WINDOW": 20,
+  "TURNOVER_MEAN_WINDOW": 10,
+  "parameter_source": "mining run; signal carried to keep the reported book reproducible",
+  "signal_source": "shipped with the package (see README)",
+  "signal_file": "signals.parquet",
+  "signal_rows": 78630,
+  "signal_sha256": "f9878c1616cecc4da6c4bf4e4289a1ebc2530cfeb0dcf12c0bbe26bf93633ad1"
 }

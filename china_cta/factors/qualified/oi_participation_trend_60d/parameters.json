@@ -1,0 +1,19 @@
+{
+  "name": "oi_participation_trend_60d",
+  "folder": "oi_participation_trend",
+  "source": "hand-written",
+  "parameter_source": "local Bayesian tuning optimum (results/tuning/qualified4_300)",
+  "parameters": {
+    "oi_normalization_lookback": 360,
+    "trend_smoothing_span": 3,
+    "trend_deadband": 0.02645272229739854,
+    "trend_volatility_halflife": 5,
+    "trend_target_annualized_volatility": 0.13700311523618544,
+    "oi_growth_lookback": 68,
+    "oi_smoothing_span": 6,
+    "minimum_oi_observations": 252,
+    "minimum_contracts": 3,
+    "rebalance_every": 6,
+    "signal_scale": 0.615749574733305
+  }
+}

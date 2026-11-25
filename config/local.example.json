@@ -1,0 +1,6 @@
+{
+  "research_inputs": "data/research_inputs/cta_alpha22",
+  "results": "results",
+  "rqdata_cache": "data/cache/rqdata",
+  "rqalpha_bundle": null
+}

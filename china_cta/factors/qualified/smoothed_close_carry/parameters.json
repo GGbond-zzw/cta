@@ -1,8 +1,10 @@
 {
-  "parameter_source": "function defaults;not historical tuned optimum",
+  "parameter_source": "round-two spec defaults (smoothing 5, scale 0.05, deadband 0.05)",
   "parameters": {
     "smoothing_sessions": 5,
     "signal_scale": 0.05,
     "deadband": 0.05
-  }
+  },
+  "folder": "smoothed_close_carry",
+  "name": "our_close_carry_smooth5"
 }

@@ -3,12 +3,18 @@ from pathlib import Path
 
 import pytest
 
-from china_cta.data.fixed_universe import load_fixed_product_pool
+from china_cta.data.fixed_universe import DEFAULT_FIXED_POOL_FILE, load_fixed_product_pool
 
 
-@pytest.mark.integration
 def test_current_fixed_pool_has_thirty_unique_products():
-    pool = load_fixed_product_pool()
+    candidates = (
+        DEFAULT_FIXED_POOL_FILE,
+        Path(__file__).resolve().parents[1] / "config" / "fixed_pool_2026_09.json",
+    )
+    path = next((item for item in candidates if Path(item).is_file()), None)
+    if path is None:
+        pytest.skip("no fixed product pool snapshot in this checkout")
+    pool = load_fixed_product_pool(path)
     assert pool.holding_month == "2026-09"
     assert len(pool.products) == len(set(pool.products)) == 30
     assert pool.run_suffix == "fixedpool_2026_09"

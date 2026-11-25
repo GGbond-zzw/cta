@@ -213,3 +213,108 @@ def test_night_products_reads_the_first_trading_slot():
     )
     assert native.night_products(instruments) == {"AG"}
     assert native.product_of("RB2410") == "RB"
+
+
+def _synthetic_market(days: int = 90) -> tuple[dict, "pd.DataFrame"]:
+    import numpy as np
+    import pandas as pd
+
+    dates = pd.bdate_range("2021-01-04", periods=days)
+    steps = np.arange(days)
+    # Two product return streams with a stable, known volatility.
+    first = 0.01 * np.sin(steps / 3.0) + 0.0015 * np.cos(steps / 7.0)
+    second = 0.01 * np.cos(steps / 4.0)
+    frames: list[pd.DataFrame] = []
+    for product, returns in (("AA", first), ("BB", second)):
+        close = 1000.0 * np.cumprod(1.0 + returns)
+        frames.append(
+            pd.DataFrame(
+                {
+                    "order_book_id": f"{product}2101",
+                    "trading_date": dates,
+                    "settlement": close,
+                    "close": close,
+                }
+            )
+        )
+    bars = pd.concat(frames, ignore_index=True)
+    dominant = pd.DataFrame(
+        {
+            "trading_date": list(dates) * 2,
+            "product": ["AA"] * days + ["BB"] * days,
+            "dominant_order_book_id": ["AA2101"] * days + ["BB2101"] * days,
+        }
+    )
+    market = {"bars": bars, "instruments": pd.DataFrame(), "terms": pd.DataFrame()}
+    return market, dominant
+
+
+def test_ex_ante_leverage_hits_the_target_for_a_single_asset():
+    import pandas as pd
+    from china_cta.formal_backtest import native_account as native
+
+    market, dominant = _synthetic_market()
+    stamp = pd.Timestamp(market["bars"]["trading_date"].unique()[-1])
+    unit = pd.DataFrame(
+        {
+            "trading_date": [stamp],
+            "product": ["AA"],
+            "capital_units": [1.0],
+        }
+    )
+    path = native.ex_ante_leverage(
+        unit, market, dominant, target=0.20, window=60, cap=10.0, min_periods=40,
+        smoothing=0,
+    )
+    returns = native.product_close_returns(market, dominant)
+    realised = float(returns.loc[returns.index < stamp, "AA"].tail(60).std(ddof=1)) * (252.0 ** 0.5)
+    assert abs(float(path.loc[stamp]) - 0.20 / realised) < 1e-9
+
+
+def test_ex_ante_leverage_respects_the_cap_and_the_warmup():
+    import pandas as pd
+    from china_cta.formal_backtest import native_account as native
+
+    market, dominant = _synthetic_market()
+    dates = pd.to_datetime(market["bars"]["trading_date"].unique())
+    unit = pd.DataFrame(
+        {
+            "trading_date": [dates[10], dates[-1]],
+            "product": ["AA", "AA"],
+            "capital_units": [1.0, 1.0],
+        }
+    )
+    path = native.ex_ante_leverage(
+        unit, market, dominant, target=5.0, window=60, cap=2.5, min_periods=40,
+        smoothing=0,
+    )
+    assert float(path.loc[dates[10]]) == 1.0  # not enough history yet
+    assert float(path.loc[dates[-1]]) == 2.5  # target unreachable -> cap
+
+
+def test_ex_ante_leverage_smoothing_damps_the_ratio():
+    import pandas as pd
+    from china_cta.formal_backtest import native_account as native
+
+    market, dominant = _synthetic_market()
+    dates = pd.to_datetime(market["bars"]["trading_date"].unique())
+    unit = pd.DataFrame(
+        {
+            "trading_date": [dates[50], dates[-1]],
+            "product": ["AA", "AA"],
+            "capital_units": [1.0, 3.0],
+        }
+    )
+    raw = native.ex_ante_leverage(
+        unit, market, dominant, target=0.20, window=60, cap=50.0, min_periods=40,
+        smoothing=0,
+    )
+    smooth = native.ex_ante_leverage(
+        unit, market, dominant, target=0.20, window=60, cap=50.0, min_periods=40,
+        smoothing=15,
+    )
+    # the smoothed path stays inside the raw range and is damped towards it
+    low, high = float(raw.min()), float(raw.max())
+    assert low - 1e-9 <= float(smooth.loc[dates[-1]]) <= high + 1e-9
+    assert abs(float(smooth.loc[dates[-1]]) - float(raw.loc[dates[-1]])) > 1e-9
+

@@ -415,3 +415,112 @@ def _normalize_product(value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("underlying_symbol must be a non-empty string")
     return value.strip().upper()
+
+
+# Moved here from the retired scripts/research/basis_momentum_test.py so
+# that scripts/10_fetch_research_inputs.py keeps a single data-layer import.
+def load_contract_history(
+    adapter: RQDataAdapter,
+    products: list[str],
+    calendar: pd.DatetimeIndex,
+    start_date: str,
+    end_date: str,
+    *,
+    include_open_interest: bool = False,
+) -> pd.DataFrame:
+    """Build complete point-in-time curves without skipping missing prices."""
+
+    master = adapter.get_future_instruments().copy()
+    master = master.loc[
+        master["underlying_symbol"].isin(products)
+        & master["listed_date"].notna()
+        & master["maturity_date"].notna()
+        & master["listed_date"].le(pd.Timestamp(end_date))
+        & master["maturity_date"].ge(pd.Timestamp(start_date)),
+        [
+            "order_book_id",
+            "underlying_symbol",
+            "listed_date",
+            "de_listed_date",
+            "maturity_date",
+        ],
+    ].copy()
+    if master.empty:
+        raise RuntimeError("No matching real futures contracts were returned by RQData")
+
+    bars: list[pd.DataFrame] = []
+    open_interest_bars: list[pd.DataFrame] = []
+    contract_ids = master["order_book_id"].astype(str).tolist()
+    for offset in range(0, len(contract_ids), BAR_QUERY_CHUNK_SIZE):
+        chunk = contract_ids[offset : offset + BAR_QUERY_CHUNK_SIZE]
+        bars.append(
+            adapter.get_bars(
+                chunk,
+                start_date,
+                end_date,
+                fields=("close",),
+            )
+        )
+        if include_open_interest:
+            open_interest_bars.append(
+                adapter.get_bars(
+                    chunk,
+                    start_date,
+                    end_date,
+                    fields=("open_interest",),
+                )
+            )
+    closes = pd.concat(bars, ignore_index=True).rename(
+        columns={"close": "price"}
+    )
+    if include_open_interest:
+        open_interest = pd.concat(open_interest_bars, ignore_index=True)
+        closes = closes.merge(
+            open_interest,
+            on=["trading_date", "order_book_id"],
+            how="outer",
+            validate="one_to_one",
+        )
+
+    dates = pd.DataFrame({"trading_date": calendar})
+    dates["_join_key"] = 1
+    master["_join_key"] = 1
+    active = dates.merge(master, on="_join_key", how="inner").drop(
+        columns="_join_key"
+    )
+    active = active.loc[
+        active["listed_date"].le(active["trading_date"])
+        & active["maturity_date"].ge(active["trading_date"])
+        & (
+            active["de_listed_date"].isna()
+            | active["de_listed_date"].ge(active["trading_date"])
+        )
+    ].copy()
+    active = active.merge(
+        closes,
+        on=["trading_date", "order_book_id"],
+        how="left",
+        validate="one_to_one",
+    )
+    active["days_to_maturity"] = (
+        active["maturity_date"] - active["trading_date"]
+    ).dt.days.astype("Int64")
+    active["price_field"] = "close"
+    output_columns = [
+        "trading_date",
+        "underlying_symbol",
+        "order_book_id",
+        "maturity_date",
+        "days_to_maturity",
+        "price",
+        "price_field",
+    ]
+    if include_open_interest:
+        output_columns.append("open_interest")
+    return active.loc[:, output_columns].sort_values(
+        ["underlying_symbol", "trading_date", "maturity_date", "order_book_id"]
+    ).reset_index(drop=True)
+
+
+if __name__ == "__main__":
+    main()

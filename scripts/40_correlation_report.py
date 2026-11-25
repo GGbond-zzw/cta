@@ -31,7 +31,8 @@ sys.path.insert(0, str(PROJECT))
 
 from china_cta.research import bayesian_tuning as bt  # noqa: E402
 from china_cta.research.fast_backtest import run_fast_research_backtest  # noqa: E402
-from china_cta.factors import exported as exported_sleeves  # noqa: E402
+from china_cta.factors import QUALIFIED_BUILDERS  # noqa: E402
+from china_cta.factors.cta_catalog import AVAILABLE_FACTORS  # noqa: E402
 
 INPUT_DIR = PROJECT / "data" / "research_inputs" / "cta_alpha22"
 TUNED_DIR = PROJECT / "results" / "tuning" / "qualified4_300"
@@ -95,18 +96,38 @@ def _one_tuned(name: str, tuned_dir: Path) -> dict[str, object]:
     return _measure(name, factor, params=params, sharpe=payload["best_train"]["sharpe"])
 
 
-def _one_exported(name: str, package_dir: Path) -> dict[str, object]:
-    sleeve = exported_sleeves.resolve(name)[0]
-    table = exported_sleeves.load_signals(package_dir, sleeve)
-    frozen = {"signal_scale": sleeve.scale, "direction": sleeve.direction}
-    return _measure(name, table, params=frozen, sharpe=float("nan"))
+def _one_package(name: str) -> dict[str, object]:
+    assert _INPUTS is not None
+    table = QUALIFIED_BUILDERS[name](_INPUTS)
+    return _measure(name, table, params={"source": "in-repo package"}, sharpe=float("nan"))
 
 
 def _one_factor(job: tuple[str, str, str]) -> dict[str, object]:
     kind, name, target = job
-    if kind == "exported":
-        return _one_exported(name, Path(target))
+    if kind == "package":
+        return _one_package(name)
     return _one_tuned(name, Path(target))
+
+
+def _package_selection(spec: str, already: list[str]) -> list[str]:
+    """Resolve ``--package-factors`` into package names not already measured."""
+
+    text = (spec or "none").strip().lower()
+    routable = set(AVAILABLE_FACTORS)
+    taken = set(already)
+    available = [name for name in QUALIFIED_BUILDERS if name not in taken and name in routable]
+    if text == "none":
+        return []
+    if text in {"all", "qualified"}:
+        return available
+    wanted = [item.strip() for item in text.split(",") if item.strip()]
+    unknown = [item for item in wanted if item not in QUALIFIED_BUILDERS]
+    if unknown:
+        raise SystemExit(f"unknown package factors: {unknown}")
+    blocked = [item for item in wanted if item not in routable]
+    if blocked:
+        raise SystemExit(f"package factors that cannot run in this environment: {blocked}")
+    return [item for item in wanted if item not in taken]
 
 
 def _rank_corr(a: np.ndarray, b: np.ndarray) -> float:
@@ -168,15 +189,9 @@ def main() -> int:
     parser.add_argument("--tuned-dir", type=Path, default=TUNED_DIR)
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
     parser.add_argument(
-        "--extra-package",
-        action="append",
-        default=None,
-        help="directory of a frozen mined-signal export; repeat the flag to mix packages",
-    )
-    parser.add_argument(
-        "--extra-factors",
-        default="none",
-        help="comma separated exported sleeve names, or all/none",
+        "--package-factors",
+        default="qualified",
+        help="comma separated in-repo qualified packages, or all/qualified/none",
     )
     args = parser.parse_args()
 
@@ -185,13 +200,10 @@ def main() -> int:
     print(f"tuned factors: {names}", flush=True)
 
     jobs: list[tuple[str, str, str]] = [("tuned", name, str(tuned_dir)) for name in names]
-    requested = (
-        exported_sleeves.resolve(args.extra_factors) if args.extra_package else ()
-    )
-    for sleeve, package_dir in exported_sleeves.locate(requested, args.extra_package):
-        exported_sleeves.validate_package(package_dir, (sleeve,))
-        jobs.append(("exported", sleeve.name, str(package_dir)))
-        print(f"exported sleeve: {sleeve.name} <- {package_dir} / {sleeve.folder}", flush=True)
+    packages = _package_selection(args.package_factors, names)
+    jobs += [("package", name, "") for name in packages]
+    if packages:
+        print(f"in-repo packages: {packages}", flush=True)
 
     with ProcessPoolExecutor(
         max_workers=args.processes, initializer=_init_worker

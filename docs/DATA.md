@@ -1,67 +1,50 @@
-# Data
+# 数据
 
-## Tables
+## 1. 输入表
 
-`data/research_inputs/cta_alpha22/` holds six parquet files:
+位于 `data/research_inputs/cta_alpha22/`（可用 `CTA_RESEARCH_INPUT_DIR` 改）。行数按 2026-10-30 的版本统计。
 
-| table | columns | used by |
-| --- | --- | --- |
-| `continuous_prices` | `trading_date, underlying_symbol, close, open, high, low, volume, open_interest` | every sleeve |
-| `contract_snapshots` | `contract, trading_date, ..., maturity_date, days_to_maturity, open_interest, close` | carry, OI participation |
-| `dominant_map` | `trading_date, underlying_symbol, contract` | continuous series construction |
-| `member_rank` | member long/short ranks | historical research only |
-| `universe` | `trading_date, instrument, eligible` | every sleeve |
-| `warehouse_stocks` | registered warehouse stocks | basis/carry research |
+| 文件 | 行数 | 用途 |
+| --- | ---: | --- |
+| `continuous_prices.parquet` | 70,782 | 主力连续价格（含 `open/close/high/low/volume/open_interest`），因子与撮合都用它 |
+| `contract_snapshots.parquet` | 771,801 | 真实合约日快照（收盘价、持仓量、到期日），期限结构类因子用 |
+| `dominant_map.parquet` | 70,782 | 每日每品种的主力合约（`rule=0, rank=1`） |
+| `universe.parquet` | 70,782 | 每日每品种是否可交易（`eligible`）及原因 |
+| `member_rank.parquet` | 2,729,398 | 会员多空持仓排名（历史研究用，当前十条腿不依赖） |
+| `warehouse_stocks.parquet` | 64,558 | 注册仓单 |
 
-Price adjustment follows RQData's `pre` / `prev_close_ratio` convention. The
-`open` column is the first traded price of the trading day (the 21:00 night-session
-open for night products), i.e. the earliest executable price after a close
-signal. RQData does not deliver it, so `scripts/12_add_open_from_bundle.py`
-reconstructs it from the local RQAlpha bundle as
-`open = raw_open * cached_close / raw_close` and writes the column in place.
-Rows the bundle does not reach can be filled with `close` through
-`--fill-missing-with-close`; the parquet metadata then records
-`open_source=bundle=N;close_fallback=M`. The current checkout was built that
-way: 69,762 rows from the bundle and 1,020 rows (after 2026-09-04) filled with
-close, out to 2026-10-30.
+## 2. 关键列
 
-## Sources
+`continuous_prices`：`trading_date, underlying_symbol, close, open, high, low, volume, open_interest`。
+前复权口径（`adjust_type=pre`、`adjust_method=prev_close_ratio`），价格带 attrs：
+`usage=signal_research_only`、`cash_pnl_allowed=False`。
 
-* **RQData** (`china_cta/data/rqdata_adapter.py`): the original source for all
-  six tables, driven by `scripts/10_fetch_research_inputs.py`. Requires
-  `RQDATAC_CONF` / `RQDATAC2_CONF`.
-* **RQAlpha bundle** (`.rqalpha/bundle/futures.h5` + `instruments.pk`): a local
-  fallback that provides per-contract bars and maturity dates. It does not carry
-  member rank, so `member_rank` is copied from the cached table and the OI
-  participation sleeve uses total open interest, not member positions.
+`contract_snapshots`：`trading_date, underlying_symbol, order_book_id, maturity_date, days_to_maturity, price, price_field, open_interest`，
+`price_field` 恒为 `close`（未复权真实合约收盘）。
 
-## Rebuilding an extension
+`dominant_map`：`trading_date, product, dominant_order_book_id`。
+`universe`：`trading_date, instrument, eligible, reason`（`reason` 取 `eligible` / `insufficient_listing_history` / `insufficient_liquidity`）。
 
-```bash
-python scripts/20_rebuild_inputs_from_bundle.py \
-    --input-dir data/research_inputs/cta_alpha22 \
-    --output-dir data/research_inputs/cta_alpha22_extended \
-    --bundle C:/Users/ct/Desktop/python/CTA/Mikuang_data/.rqalpha/bundle \
-    --extension-start 2026-01-01
-```
+## 3. 生成方式
 
-The rebuild keeps the cached history unchanged and appends the extension with
-the dominant contract chosen by open interest. It prints two validations:
+| 文件 | 生成脚本 |
+| --- | --- |
+| 六个基础输入（RQData 路线） | `scripts/10_fetch_research_inputs.py` |
+| 六个基础输入（bundle 路线） | `scripts/20_rebuild_inputs_from_bundle.py` |
+| 补 `open` 列 | `scripts/12_add_open_from_bundle.py` |
+| 固定 30 品种池 | `scripts/15_select_liquid_universe.py` |
 
-* `chaining check`: continuous returns of the rebuilt 2016-2025 segment against
-  the cache (expected correlation 1.000000, max absolute difference ~4e-16);
-* `snapshot overlap`: rebuilt contract snapshots against the cache
-  (expected 707,431/707,431 rows with zero price and OI difference).
+## 4. 约定
 
-Known limitation: RQData's dominant-contract rule is smoothed, while the rebuild
-uses a pure open-interest argmax, so contract names agree on roughly 96.5% of
-days, mostly around rolls. Continuous returns are unaffected because the
-chaining uses each contract's own `prev_close`.
+- **交易日**：以价格面板里的 `trading_date` 为准，不额外读交易日历；每个因子的窗口都按面板内的交易日计。
+- **品种代码**：连续价格与快照用 `underlying_symbol`（品种级），快照另有 `order_book_id`（合约级）；挖掘因子的特征在品种级聚合后使用。
+- **缺失**：不填充、不前向复制；窗口不满则该日不出信号。
+- **时点**：所有因子只用 T 日及更早的数据；T 日收盘出信号，T+1 开盘成交。
 
-## Conventions
+## 5. 质量校验
 
-* Trading calendar: Chinese futures exchange sessions, 2016-01-04 onwards.
-* Signal date `t` uses close prices; execution at open of `t+1`; evaluation
-  window ends at open of `t+2`.
-* Missing or ineligible instruments are dropped cross-sectionally; the sleeve
-  return is the mean over names available on that date.
+变更数据后建议跑三项核对：
+
+1. `continuous_prices` 与 `contract_snapshots` 的主力合约收盘价在重叠日应完全一致；
+2. 新旧两版输入的**日收益**应逐位一致（价格水平可能因复权基准不同而变化，收益不应变化）；
+3. `open/close` 比值分位应落在 0.95–1.05 区间，异常值说明复权或对齐有问题。

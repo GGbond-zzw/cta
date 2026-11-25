@@ -1,0 +1,13 @@
+{
+  "name": "fixed_maturity_carry_90_180d",
+  "folder": "fixed_maturity_carry",
+  "source": "hand-written",
+  "parameter_source": "local Bayesian tuning optimum (results/tuning/qualified4_300)",
+  "parameters": {
+    "near_days": 80,
+    "min_days_to_maturity": 11,
+    "max_gap_days": 80,
+    "signal_scale": 0.0763984642190698,
+    "far_days": 170
+  }
+}

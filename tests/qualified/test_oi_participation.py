@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from china_cta.factors.qualified.oi_participation_trend import (
+from china_cta.factors.qualified.oi_participation_trend_60d import (
     calculate_oi_participation_trend,
 )
 

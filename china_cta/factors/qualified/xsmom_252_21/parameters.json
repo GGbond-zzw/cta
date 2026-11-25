@@ -1,6 +1,11 @@
 {
-  "lookback": 252,
-  "skip": 21,
-  "signal_scale": 1,
-  "parameter_source": "original build defaults"
+  "name": "xsmom_252_21",
+  "folder": "xsmom_252_21",
+  "source": "hand-written",
+  "parameter_source": "local Bayesian tuning optimum (results/tuning/qualified4_300)",
+  "parameters": {
+    "lookback": 246,
+    "skip": 53,
+    "signal_scale": 0.6397851035292096
+  }
 }

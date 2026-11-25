@@ -30,9 +30,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from china_cta.formal_backtest import native_account as native  # noqa: E402
 from china_cta.research import bayesian_tuning as bt  # noqa: E402
-from china_cta.factors import exported as exported_sleeves  # noqa: E402
+from china_cta.factors.cta_catalog import AVAILABLE_FACTORS
+from china_cta.factors.qualified import BUILDERS as QUALIFIED_BUILDERS  # noqa: E402
 from china_cta.research.fast_backtest import run_fast_research_backtest  # noqa: E402
-from china_cta.runtime_paths import get_rqalpha_bundle_path  # noqa: E402
+from china_cta.runtime_paths import require_rqalpha_bundle_path  # noqa: E402
 
 DEFAULT_FACTORS = (
     "historical_skewness_252d",
@@ -87,12 +88,20 @@ def _build_sleeve(task: tuple[str, str]) -> tuple[str, pd.DataFrame, pd.DataFram
     return name, signals, daily
 
 
-def _build_exported_sleeve(task: tuple[str, str]) -> tuple[str, pd.DataFrame, pd.DataFrame]:
-    """Frozen mined signal -> sleeve signals + research-proxy daily returns."""
+def _build_package_sleeve(task: tuple[str, str]) -> tuple[str, pd.DataFrame, pd.DataFrame]:
+    """Build one of the eleven in-repo qualified packages (parameters live in the package)."""
 
-    name, package_dir = task
-    sleeve = exported_sleeves.resolve(name)[0]
-    table = exported_sleeves.load_signals(Path(package_dir), sleeve)
+    name, _ = task
+    table = QUALIFIED_BUILDERS[name](_INPUTS)
+    signals = pd.DataFrame(
+        {
+            "trading_date": pd.to_datetime(table["trading_date"]),
+            "product": table["instrument"].astype(str),
+            "signal": table["signal"].astype(float),
+            "sleeve": name,
+        }
+    )
+    signals = signals.loc[signals["signal"].ne(0)].reset_index(drop=True)
     result = run_fast_research_backtest(
         table,
         _INPUTS["continuous_prices"],
@@ -103,20 +112,6 @@ def _build_exported_sleeve(task: tuple[str, str]) -> tuple[str, pd.DataFrame, pd
         include_breakdowns=False,
     )
     detail = result["detail"]
-    # ``detail`` is already joined with the universe, so the extra sleeve trades exactly the
-    # products the project can price and size instead of the package's wider 35-product set.
-    signals = pd.DataFrame(
-        {
-            "trading_date": pd.to_datetime(detail["signal_date"]),
-            "product": detail["instrument"].astype(str),
-            "signal": detail["signal"].astype(float),
-            "sleeve": name,
-        }
-    )
-    signals = signals.loc[signals["signal"].ne(0)].reset_index(drop=True)
-    dropped = sorted(set(table["instrument"]) - set(signals["product"]))
-    if dropped:
-        print(f"  {name}: outside the project universe: {dropped}")
     daily = (
         detail.groupby("realization_date")["net_signal_return"]
         .mean()
@@ -129,9 +124,33 @@ def _build_exported_sleeve(task: tuple[str, str]) -> tuple[str, pd.DataFrame, pd
 
 def _build_any(task: tuple[str, str, str]) -> tuple[str, pd.DataFrame, pd.DataFrame]:
     kind, name, directory = task
-    if kind == "exported":
-        return _build_exported_sleeve((name, directory))
+    if kind == "package":
+        return _build_package_sleeve((name, directory))
     return _build_sleeve((name, directory))
+
+
+def _package_selection(spec: str, already: Sequence[str]) -> list[str]:
+    """Resolve ``--package-factors`` into package names not already in the book."""
+
+    text = (spec or "none").strip().lower()
+    routable = set(AVAILABLE_FACTORS)
+    available = [
+        name for name in QUALIFIED_BUILDERS if name not in set(already) and name in routable
+    ]
+    if text == "none":
+        return []
+    if text in {"all", "qualified"}:
+        return available
+    wanted = [item.strip() for item in text.split(",") if item.strip()]
+    unknown = [item for item in wanted if item not in QUALIFIED_BUILDERS]
+    if unknown:
+        raise SystemExit(f"unknown package factors: {unknown}")
+    blocked = [item for item in wanted if item not in routable]
+    if blocked:
+        raise SystemExit(
+            f"package factors that cannot run in this environment: {blocked}"
+        )
+    return [item for item in wanted if item not in set(already)]
 
 
 def _book_selection(spec: str, sleeves: dict[str, pd.DataFrame]) -> set[str]:
@@ -146,6 +165,25 @@ def _book_selection(spec: str, sleeves: dict[str, pd.DataFrame]) -> set[str]:
     if unknown:
         raise SystemExit(f"--book-factors: not part of this run: {unknown}")
     return set(raw)
+
+
+def _calibration_path(
+    equity: pd.Series,
+    *,
+    target: float,
+    window: int,
+    cap: float,
+    min_periods: int,
+) -> pd.Series:
+    """Rolling correction from pass-1 realised volatility to the target."""
+
+    returns = equity.pct_change()
+    trailing = (
+        returns.rolling(window, min_periods=min_periods).std(ddof=1).shift(1)
+        * (252.0**0.5)
+    )
+    factor = (target / trailing.where(trailing > 0)).clip(lower=0.0, upper=cap)
+    return factor.fillna(1.0).astype(float)
 
 
 def _leverage(daily: pd.Series, *, window: int, target: float, cap: float) -> pd.Series:
@@ -234,10 +272,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--factors", default=",".join(DEFAULT_FACTORS))
     parser.add_argument(
-        "--extra-package",
-        action="append",
-        default=None,
-        help="directory of a frozen mined-signal export; repeat the flag to mix packages (see china_cta.factors.exported)",
+        "--package-factors",
+        default="none",
+        help="comma separated in-repo qualified packages to build from code, or all/qualified/none",
     )
     parser.add_argument(
         "--extra-factors",
@@ -272,36 +309,73 @@ def main() -> None:
     parser.add_argument("--log-level", default="error")
     parser.add_argument("--calibrate-vol", action="store_true", default=True)
     parser.add_argument("--no-calibrate-vol", dest="calibrate_vol", action="store_false")
-    parser.add_argument("--max-calibration", type=float, default=3.0)
+    parser.add_argument(
+        "--calibration",
+        choices=("rolling", "one-shot"),
+        default="rolling",
+        help="rolling: re-estimate the correction from trailing realised volatility; "
+        "one-shot: one scalar for the whole window",
+    )
+    parser.add_argument("--calibration-window", type=int, default=250)
+    parser.add_argument("--calibration-min-periods", type=int, default=250)
+    parser.add_argument("--max-calibration", type=float, default=2.0)
+    parser.add_argument(
+        "--sizing-smoothing",
+        type=int,
+        default=15,
+        help="EWMA span applied to the ex-ante leverage ratio (0 disables it).",
+    )
+    parser.add_argument(
+        "--structural-factor",
+        type=float,
+        default=None,
+        help=(
+            "Constant multiplier applied to the ex-ante leverage.  Default: derive it "
+            "once from the pass-1 shortfall (target / realised), capped by "
+            "--max-calibration.  Pass 1.0 to disable."
+        ),
+    )
+    parser.add_argument(
+        "--sizing",
+        choices=("exante", "calibrate"),
+        default="calibrate",
+        help=(
+            "exante: size the book so its *predicted* volatility (rollling 60 session "
+            "covariance of the dominant contracts) hits the target; single pass, no "
+            "calibration factor.  calibrate: keep the research overlay and scale it by "
+            "the measured pass-1 shortfall."
+        ),
+    )
     args = parser.parse_args()
 
     factors = tuple(item.strip() for item in args.factors.split(",") if item.strip())
     tuned_dir = Path(args.tuned_dir)
-    missing = [name for name in factors if not (tuned_dir / name / "best_params.json").exists()]
+    missing = [
+        name
+        for name in factors
+        if not (tuned_dir / name / "best_params.json").exists()
+        and name not in QUALIFIED_BUILDERS
+    ]
     if missing:
-        raise SystemExit(f"no tuned parameters for {missing} under {tuned_dir}")
+        raise SystemExit(
+            f"no tuned parameters for {missing} under {tuned_dir} and no in-repo package"
+        )
 
     output = Path(args.out_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    requested = exported_sleeves.resolve(args.extra_factors) if args.extra_package else ()
-    located = exported_sleeves.locate(requested, args.extra_package) if requested else ()
-    for sleeve, package_dir in located:
-        exported_sleeves.validate_package(package_dir, (sleeve,))
-    exported: tuple[exported_sleeves.ExportedSleeve, ...] = tuple(
-        sleeve for sleeve, _ in located
-    )
     print(f"building {len(factors)} tuned sleeves from {tuned_dir}")
-    if exported:
-        print(f"appending {len(exported)} exported sleeves from {len(args.extra_package)} package(s)")
-        for sleeve, package_dir in located:
-            print(f"  {sleeve.name:<34} <- {package_dir} / {sleeve.folder} ({sleeve.source})")
-    tasks: list[tuple[str, str, str]] = [
-        ("tuned", name, str(tuned_dir)) for name in factors
-    ]
-    tasks += [
-        ("exported", sleeve.name, str(package_dir)) for sleeve, package_dir in located
-    ]
+    tasks: list[tuple[str, str, str]] = []
+    for name in factors:
+        if (tuned_dir / name / "best_params.json").exists():
+            tasks.append(("tuned", name, str(tuned_dir)))
+        else:
+            tasks.append(("package", name, ""))
+
+    packages = _package_selection(args.package_factors, factors)
+    tasks += [("package", name, "") for name in packages]
+    if packages:
+        print(f"appending {len(packages)} in-repo packages: {list(packages)}")
     signals_by_sleeve: dict[str, pd.DataFrame] = {}
     daily_by_sleeve: dict[str, pd.Series] = {}
     with ProcessPoolExecutor(
@@ -316,10 +390,9 @@ def main() -> None:
 
     weights = {name: 1.0 / len(signals_by_sleeve) for name in signals_by_sleeve}
     meta: dict[str, Any] = {
+        "package_sleeves": list(packages),
         "sleeves": list(signals_by_sleeve),
         "sleeve_weights": dict(weights),
-        "exported_packages": [str(Path(item)) for item in (args.extra_package or [])],
-        "exported_sleeves": [sleeve.as_dict() for sleeve in exported],
     }
 
     all_stamps = pd.to_datetime(
@@ -368,7 +441,11 @@ def main() -> None:
     ].reset_index(drop=True)
     dominant["product"] = dominant["product"].astype(str)
 
-    bundle = Path(args.bundle) if args.bundle else get_rqalpha_bundle_path()
+    bundle = (
+        Path(args.bundle)
+        if args.bundle
+        else require_rqalpha_bundle_path("scripts/70_native_backtest.py")
+    )
     market = native.load_market(
         bundle,
         sorted(signals["product"].unique().tolist()),
@@ -439,13 +516,128 @@ def main() -> None:
     first_equity = output / "daily_equity.csv"
     (output / "daily_equity_pass1.csv").write_text(first_equity.read_text(encoding="utf-8"), encoding="utf-8")
 
-    calibration = 1.0
     realised = float(metrics1.get("annualized_volatility", 0.0))
-    targets, result, metrics = targets1, result1, metrics1
-    if args.calibrate_vol and realised > 1e-9:
-        calibration = min(args.vol_target / realised, args.max_calibration)
-        print(f"calibration: realised {realised:.4f} vs target {args.vol_target:.4f} -> x{calibration:.3f}")
-        scaled = (overlay_leverage * calibration).clip(upper=args.max_leverage * args.max_calibration)
+
+    if args.sizing == "exante":
+        unit = exposure.rename(columns={"exposure": "capital_units"})
+        continuous = pd.read_parquet(Path(args.input_dir) / "continuous_prices.parquet")
+        scaled = native.ex_ante_leverage(
+            unit,
+            market,
+            dominant,
+            target=args.vol_target,
+            window=args.vol_window,
+            cap=args.max_leverage * args.max_calibration,
+            min_periods=args.calibration_min_periods,
+            prices=continuous,
+            smoothing=args.sizing_smoothing,
+        )
+        if scaled.empty:
+            raise SystemExit("ex-ante sizing produced no leverage path")
+        structural = 1.0
+        if args.structural_factor is not None:
+            structural = float(args.structural_factor)
+        if structural != 1.0:
+            scaled = (scaled * structural).clip(upper=args.max_leverage * args.max_calibration)
+            print(
+                f"structural factor x{structural:.4f} "
+                f"(pass-1 realised {realised:.4f} vs target {args.vol_target:.4f})"
+            )
+        scaled = scaled.reindex(overlay["trading_date"]).ffill().fillna(1.0)
+        ceiling = args.max_leverage * args.max_calibration
+        implied = args.vol_target / float(scaled.median()) if float(scaled.median()) else float("nan")
+        print(
+            "ex-ante sizing: median leverage={:.2f} min={:.2f} max={:.2f} capped={}/{} "
+            "| implied book vol at median={:.4f}".format(
+                float(scaled.median()),
+                float(scaled.min()),
+                float(scaled.max()),
+                int((scaled >= ceiling - 1e-9).sum()),
+                len(scaled),
+                implied,
+            )
+        )
+        pd.DataFrame(
+            {
+                "trading_date": scaled.index,
+                "ex_ante_leverage": scaled.to_numpy(),
+                "research_combo_return": overlay["research_combo_return"].to_numpy(),
+            }
+        ).to_csv(output / "exante_leverage.csv", index=False, float_format="%.17g")
+        print("=== native account, ex-ante risk sizing (single pass) ===")
+        targets, result, metrics = replay(scaled, "exante")
+        native.write_outputs(
+            result,
+            config,
+            targets=targets,
+            extra={
+                "pass": "exante",
+                **meta,
+                "sizing": "exante",
+                "structural_factor": structural,
+                "calibration_mode": "none",
+                "vol_window": args.vol_window,
+                "vol_target": args.vol_target,
+                "leverage_median": float(scaled.median()),
+                "pass1": metrics1,
+            },
+        )
+
+    calibration_mode = args.calibration
+    calibration: float | pd.Series = 1.0
+    if args.sizing != "exante":
+        targets, result, metrics = targets1, result1, metrics1
+    if args.sizing != "exante" and args.calibrate_vol and realised > 1e-9:
+        applied: pd.Series | float
+        if calibration_mode == "rolling":
+            pass1_equity = native.daily_equity(result1).astype(float)
+            path = _calibration_path(
+                pass1_equity.astype(float),
+                target=args.vol_target,
+                window=args.calibration_window,
+                cap=args.max_calibration,
+                min_periods=args.calibration_min_periods,
+            )
+            calibration = path
+            applied = path.reindex(overlay_leverage.index).fillna(1.0)
+            print(
+                "calibration (rolling {w}d): pass-1 realised {r:.4f} vs target {t:.4f} -> "
+                "x{mean:.3f} (min {low:.3f}, max {high:.3f}, capped {capped}d)".format(
+                    w=args.calibration_window,
+                    r=realised,
+                    t=args.vol_target,
+                    mean=float(path.mean()),
+                    low=float(path.min()),
+                    high=float(path.max()),
+                    capped=int((path >= args.max_calibration - 1e-12).sum()),
+                )
+            )
+            pass1_trailing = (
+                pass1_equity.pct_change()
+                .rolling(args.calibration_window, min_periods=args.calibration_min_periods)
+                .std(ddof=1)
+                .shift(1)
+                * (252.0**0.5)
+            )
+            pd.DataFrame(
+                {
+                    "trading_date": path.index,
+                    "pass1_trailing_volatility": pass1_trailing.reindex(path.index).to_numpy(),
+                    "calibration": path.to_numpy(),
+                }
+            ).to_csv(output / "calibration_path.csv", index=False, float_format="%.17g")
+        else:
+            scalar = min(args.vol_target / realised, args.max_calibration)
+            calibration = scalar
+            applied = pd.Series(scalar, index=overlay_leverage.index)
+            print(
+                "calibration (one-shot): realised {r:.4f} vs target {t:.4f} -> x{s:.3f}".format(
+                    r=realised, t=args.vol_target, s=scalar
+                )
+            )
+        scaled = (overlay_leverage * applied).clip(
+            upper=args.max_leverage * args.max_calibration
+        )
         pd.DataFrame(
             {
                 "trading_date": overlay["trading_date"],
@@ -457,6 +649,21 @@ def main() -> None:
         )
         print("=== native account, pass 2 (calibrated overlay) ===")
         targets, result, metrics = replay(scaled, "pass2")
+        factor_mean = (
+            float(calibration.mean())
+            if isinstance(calibration, pd.Series)
+            else float(calibration)
+        )
+        factor_low = (
+            float(calibration.min())
+            if isinstance(calibration, pd.Series)
+            else float(calibration)
+        )
+        factor_high = (
+            float(calibration.max())
+            if isinstance(calibration, pd.Series)
+            else float(calibration)
+        )
         native.write_outputs(
             result,
             config,
@@ -464,7 +671,13 @@ def main() -> None:
             extra={
                 "pass": "pass2",
                 **meta,
-                "calibration_factor": calibration,
+                "calibration_mode": calibration_mode,
+                "calibration_window": (
+                    args.calibration_window if calibration_mode == "rolling" else None
+                ),
+                "calibration_factor": factor_mean,
+                "calibration_min": factor_low,
+                "calibration_max": factor_high,
                 "leverage_median": float(scaled.median()),
                 "pass1": metrics1,
             },

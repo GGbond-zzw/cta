@@ -1,9 +1,15 @@
 {
   "name": "volume_burst_vol_reversal_60d",
-  "folder": "new_01_previous_round",
-  "source": "mined_8eb423cac50b",
+  "expression": "mean_60(corr_20(delta_20(volume_surprise_20), mean_60(volatility_ratio)))，方向 −1",
   "direction": -1,
   "scale": 0.3029101622490162,
-  "description": "上一轮1号：放量加速与波动放大（vol20/vol60）的 20 日相关性，再取 60 日均值后取负。",
-  "expression": "mul(-1, mean(corr(delta(volume_surprise_20, 20), mean(volatility_ratio, 60), 20), 60))"
+  "SMOOTHING_WINDOW": 60,
+  "CORRELATION_WINDOW": 20,
+  "DELTA_WINDOW": 20,
+  "VOLATILITY_WINDOW": 60,
+  "parameter_source": "mining run; signal carried to keep the reported book reproducible",
+  "signal_source": "shipped with the package (see README)",
+  "signal_file": "signals.parquet",
+  "signal_rows": 78630,
+  "signal_sha256": "c2655e828b9c6304f7d396503d8bdb6713033a3907439ac88650c20fbe6051ad"
 }

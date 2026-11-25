@@ -1,5 +1,9 @@
 # volume_variability_weighted_reversal
 
-入口：`china_cta.factors.qualified.volume_variability_weighted_reversal.build(inputs)`。
+入口：`china_cta.factors.qualified.volume_variability_weighted_reversal.build(inputs)`，返回标准五列因子表
+（`trading_date/instrument/factor_name/raw_factor/signal`）。
 
-标准五列输出；信号为当日信息时点，最早下一交易日开盘执行。计算实现见factor.py；冻结模型和参数随目录提交。四个原手写因子保留函数默认值，历史调参结果须显式传入原回测配置，不能把默认值误认为历史最优参数。
+- 信号时点：`trading_date` 收盘后可得，最早在下一交易日开盘执行（项目统一口径）。
+- 参数来源：冻结的挖掘拟合结果（方向与尺度），本地未重新调优
+- 参数取值：见 `parameters.json`。
+- 说明：表达式：`return_1 * std(std(volume_change, 20), 5)`。

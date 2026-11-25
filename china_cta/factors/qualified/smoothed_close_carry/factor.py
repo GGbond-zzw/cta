@@ -34,8 +34,12 @@ def input_grid(universe: pd.DataFrame) -> tuple[pd.DataFrame, pd.DatetimeIndex, 
         raise ValueError('Universe eligibility must contain explicit booleans')
     cal = pd.DatetimeIndex(sorted(u.trading_date.unique()))
     symbols = sorted(u.instrument.unique().tolist())
-    if len(u) != len(cal) * len(symbols):
-        raise ValueError('Supply every official session/product row, including eligible=False')
+    # The upstream export demanded a dense session x product grid because its
+    # universe shipped an explicit eligible=False row for every unlisted product.
+    # The local research universe only lists a product from its listing date, so
+    # a sparse grid is expected; carry() reindexes and lets the join drop the gaps.
+    if u['eligible'].dtype != bool:
+        u['eligible'] = u['eligible'].astype(bool)
     return u, cal, symbols
 
 

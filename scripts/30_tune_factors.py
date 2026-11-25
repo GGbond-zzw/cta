@@ -1,9 +1,15 @@
-"""Tune the four qualified factors with Bayesian optimization.
+"""Tune qualified factors with Bayesian optimization (project default policy).
 
 Train period: 2016-01-04 to 2021-12-31.
 Out-of-sample: 2022-01-04 to 2025-12-31 (never used by the search).
 Objective: training-period net Sharpe of the project's fast research backtest,
 subject to observation/drawdown/turnover constraints.
+
+Policy for factors entering the library (2026-11): run **300 trials** and let
+``signal_scale`` participate in the search. Adopt the tuned parameters only after
+the out-of-sample column checks out; a much smaller scale usually just means
+smaller positions and less turnover cost, so compare turnover and cost alongside
+Sharpe before accepting it.
 
 Outputs go to ``results/tuning/qualified4_300/<factor>/`` and never replace
 ``results/qualified`` (the legacy close-to-close research library).
@@ -30,14 +36,19 @@ def main() -> None:
         default="",
         help="comma-separated factor names; default is all four qualified factors",
     )
-    parser.add_argument("--trials", type=int, default=60)
+    parser.add_argument("--trials", type=int, default=300)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
+        "--no-scale-tune",
+        action="store_true",
+        help="pin signal_scale to the factor baseline instead of searching it;"
+        " the pinned results land in results/tuning/qualified4_300",
+    )
+    parser.add_argument(
         "--tune-scale",
         action="store_true",
-        help="also search signal_scale inside its historical range; writes to a"
-        " separate output directory instead of replacing the pinned-scale results",
+        help="deprecated: signal_scale is searched by default",
     )
     parser.add_argument(
         "--output-dir",
@@ -54,10 +65,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    specs = SCALE_TUNED_SPECS if args.tune_scale else TUNING_SPECS
+    tune_scale = not args.no_scale_tune
+    specs = SCALE_TUNED_SPECS if tune_scale else TUNING_SPECS
     output_dir = args.output_dir or Path(
         "results/tuning/qualified4_300_scale_tuned"
-        if args.tune_scale
+        if tune_scale
         else "results/tuning/qualified4_300"
     )
     selected = (
@@ -79,7 +91,7 @@ def main() -> None:
         seed=args.seed,
         output_dir=output_dir,
         input_dir=args.input_dir,
-        tune_scale=args.tune_scale,
+        tune_scale=tune_scale,
     )
     print(summary.to_string(index=False))
 

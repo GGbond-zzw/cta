@@ -1,5 +1,0 @@
-# 十一因子目录整理
-
-每个因子独立目录见eleven_factor_layout.json；仅注册这十一项。公共数学、数据和回测引擎保留。已删除unqualified、旧scripts/research、changes及直接依赖已移除因子的旧测试；清理前完整备份在仓库外D:/CTA/cta_main_before_cleanup_20261122。
-
-原四个手写因子保留原默认计算接口，没有趁整理修改参数。五个挖掘因子可直接从行情计算，不依赖缺失的外部信号导出包。Transformer的三份权重必须随代码提交。历史结果存在已查看测试期、事后品种池、原快照缺失等边界，目录qualified不代表统计显著性或实盘批准。

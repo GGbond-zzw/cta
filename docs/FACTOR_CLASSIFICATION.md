@@ -1,3 +1,0 @@
-# 当前十一因子分类
-
-名单和目录见eleven_factor_layout.json。统一注册为qualified.BUILDERS；公共数学工具不是额外交易因子。unqualified和两项退役挖掘因子注册已移除。qualified表示接入分类，不代表新的统计显著证明。清理记录见CLEANUP.md。

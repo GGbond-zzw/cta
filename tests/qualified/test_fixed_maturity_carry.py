@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from china_cta.factors.qualified.fixed_maturity_carry import (
+from china_cta.factors.qualified.fixed_maturity_carry_90_180d import (
     calculate_curve_carry,
     compute_curve_carry_factor,
 )

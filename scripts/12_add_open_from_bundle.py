@@ -16,7 +16,7 @@ Usage::
 
     python scripts/12_add_open_from_bundle.py \
         --input-dir data/research_inputs/cta_alpha22 \
-        --bundle C:/Users/ct/Desktop/python/CTA/Mikuang_data/.rqalpha/bundle
+        --bundle <path-to-bundle>
 
 The command is idempotent: if ``open`` is already present it exits after
 checking the column.  By default every row must be covered by the bundle; pass
@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import h5py
@@ -36,6 +37,9 @@ import numpy as np
 import pandas as pd
 
 PROJECT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT))
+
+from china_cta.runtime_paths import require_rqalpha_bundle_path  # noqa: E402
 DEFAULT_INPUT_DIR = PROJECT / "data" / "research_inputs" / "cta_alpha22"
 PRICE_COLUMNS = (
     "trading_date",
@@ -117,13 +121,9 @@ def main() -> int:
     parser.add_argument(
         "--bundle",
         type=Path,
-        default=Path(
-            os.environ.get(
-                "CTA_RQALPHA_BUNDLE_PATH",
-                r"C:\Users\ct\Desktop\python\CTA\Mikuang_data\.rqalpha\bundle",
-            )
-        ),
-        help="RQAlpha bundle directory containing futures.h5",
+        default=None,
+        help="RQAlpha bundle directory containing futures.h5 "
+        "(default: $CTA_RQALPHA_BUNDLE_PATH or config/local.json)",
     )
     parser.add_argument(
         "--fill-missing-with-close",
@@ -131,6 +131,10 @@ def main() -> int:
         help="use close for dates the bundle does not reach (logged in the metadata)",
     )
     args = parser.parse_args()
+    if args.bundle is None:
+        args.bundle = require_rqalpha_bundle_path(
+            "scripts/12_add_open_from_bundle.py joins the bundle open onto the cache"
+        )
 
     prices_path = args.input_dir / "continuous_prices.parquet"
     prices = pd.read_parquet(prices_path)

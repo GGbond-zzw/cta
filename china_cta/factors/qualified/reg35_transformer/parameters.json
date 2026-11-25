@@ -1,5 +1,7 @@
 {
   "name": "our_reg35_transformer",
   "parameters": "original function defaults;historical tuned settings supplied separately",
-  "model_manifest": "assets/reg35_transformer/manifest.json"
+  "model_manifest": "assets/reg35_transformer/manifest.json",
+  "folder": "reg35_transformer",
+  "parameter_source": "frozen model weights (assets/reg35_transformer); torch required"
 }

@@ -1,197 +1,46 @@
-# Pipeline
+# 流水线
 
-Every stage is a numbered script in `scripts/`. Defaults point at the validated
-four-sleeve book, so a stage can be re-run with no arguments.
+所有阶段都是独立脚本，按编号顺序执行。每一步只读取上一步的产物，不做隐式状态传递。
 
-| stage | script | input | output |
+| 阶段 | 脚本 | 作用 | 输入 → 产物 |
 | --- | --- | --- | --- |
-| 0 | `10_fetch_research_inputs.py` | RQData | `data/research_inputs/cta_alpha22/` |
-| 0b | `12_add_open_from_bundle.py` | RQAlpha bundle | same tables + `open` column |
-| 0c | `20_rebuild_inputs_from_bundle.py` | RQAlpha bundle | `data/research_inputs/cta_alpha22_extended/` |
-| 1 | `30_tune_factors.py` | stage 0 | `results/tuning/qualified4_300/` |
-| 1b | `31_tune_factors_by_process.py` | stage 0 | same layout, one OS process per factor |
-| 1c | `32_verify_tuning_outputs.py` | stage 1 | console checks |
-| 2 | `40_correlation_report.py` | stage 1 | `results/tuning/factor_correlation_4f/` |
-| 3 | `50_backtest_portfolio.py` | stage 0 + 1 | `results/final_4f/` |
-| 4 | `60_render_run_chart.py` | stage 3 | `comparison_equity.png` |
-| 5 | `70_native_backtest.py` | stage 0 + 1 | `results/final_9f_native/` |
-| 6 | `15_select_liquid_universe.py` | RQData | liquidity screen artefacts |
+| 00 | `00_doctor.py` | 环境自检：路径、依赖、数据、bundle，列出本机可跑的阶段 | 无 → 终端报告 |
+| 10 | `10_fetch_research_inputs.py` | 从 RQData 取六个研究输入 | RQData → `data/research_inputs/cta_alpha22/` |
+| 11 | `11_setup_linux_env.sh` | 在 WSL2 里建虚拟环境并装依赖 | 无 → `.venv-linux/` |
+| 12 | `12_add_open_from_bundle.py` | 用本地 bundle 给连续价格补 `open` 列（备用路线） | bundle + 已有输入 → 就地更新 |
+| 15 | `15_select_liquid_universe.py` | 每月流动性筛选，产出固定 30 品种池（口径见 `docs/LIQUIDITY_UNIVERSE.md`） | 快照行情 → `results/liquidity_monthly_*/` |
+| 20 | `20_rebuild_inputs_from_bundle.py` | 完全用 bundle 重建六个输入（无 RQData 时） | bundle → 新输入目录 |
+| 30 | `30_tune_factors.py` | 单进程 Optuna 调优（默认 300 trials，`signal_scale` 参与） | 输入 → `results/tuning/<run>/` |
+| 31 | `31_tune_factors_by_process.py` | 每因子一个进程的并行调优 | 输入 → `results/tuning/<run>/` |
+| 32 | `32_verify_tuning_outputs.py` | 校验调优产物完整性（trial 数、参数、约束） | 调优目录 → 报告 |
+| 40 | `40_correlation_report.py` | 因子日收益与信号截面相关性 | 输入 + 调优目录或因子包 → CSV/图 |
+| 50 | `50_backtest_portfolio.py` | 研究层等权组合回测（连续敞口、1bp） | 输入 + 参数 → `results/<run>/` |
+| 60 | `60_render_run_chart.py` | 画某次 run 的净值对比图 | `results/<run>/` → PNG |
+| 70 | `70_native_backtest.py` | 原生账户结果层（整数手、保证金、滑点、手续费） | 输入 + bundle + 因子包 → `results/<run>/` |
 
-## Stage 0 - research inputs
+## 阶段 70 的常用参数
 
-`10_fetch_research_inputs.py --start 2016-01-01 --refresh` (`--end` defaults to today)
-writes six parquet tables: `continuous_prices`, `contract_snapshots`,
-`dominant_map`, `member_rank`, `universe`, `warehouse_stocks`. The script is
-idempotent per table and refuses to overwrite without `--refresh`.
+| 参数 | 默认 | 含义 |
+| --- | --- | --- |
+| `--package-factors` | `none` | `all`／`qualified`／`none`／逗号列表：从仓库内因子包构建 |
+| `--factors` | 四个手写因子 | 从调优目录读取参数的手写因子 |
+| `--capital` | 5000 万 | 初始资金 |
+| `--margin-budget` | 0.50 | 保证金预算占**实时权益**比例 |
+| `--slippage-ticks` | 1.0 | 成交价滑点（跳数） |
+| `--volume-percent` | 0.25 | 单笔成交量占上一交易日成交量上限 |
+| `--vol-target` | 0.20 | 目标年化波动（用在校准上） |
+| `--calibration` | `rolling` | `rolling`（250 日慢速反馈）或 `one-shot`（一次性） |
+| `--books` | `all` | 是否为每个 sleeve 单独跑一个子账户 |
 
-On hosts where Smart App Control blocks `rqdatac`, run this stage inside WSL2
-(see [LINUX_SETUP.md](LINUX_SETUP.md)); the rest of the pipeline stays on
-Windows. Stage 0 requests `open` directly, so the `open` column is native.
+## 参数来源
 
-## Stage 0b - the open column (fallback)
+- 四个手写因子：`results/tuning/qualified4_300/<因子>/best_params.json`（300 次贝叶斯调优的最优点），已固化到各包的 `parameters.json`
+- 五个表达式因子：`crowded_trend_reversal_60d` 由包内公式现算；其余四个把成品信号 `signals.parquet` 放在各自包内（表达式、方向与尺度见 `parameters.json`）
+- `our_close_carry_smooth5`：固定参数（5 日平滑、scale 0.05、死区 0.05）
 
-RQData's daily futures bars expose `close`, `high`, `low`, `volume` and
-`open_interest`, but not `open`. The execution engine fills at the next open, so
-the price table needs one:
+## 验收标准
 
-```bash
-python scripts/12_add_open_from_bundle.py \
-    --input-dir data/research_inputs/cta_alpha22 \
-    --bundle C:/Users/ct/Desktop/python/CTA/Mikuang_data/.rqalpha/bundle
-```
-
-The script joins the bundle's raw open on the dominant contract and rescales it
-with `cached_close / raw_close`, so open and close share one price level. It is
-idempotent and prints the `open/close` ratio quantiles as a sanity check. Dates
-the bundle does not reach yet raise an error unless `--fill-missing-with-close`
-is passed; the fallback is recorded in the parquet metadata as
-`open_source=close_fallback`.
-
-## Stage 1 - Bayesian tuning
-
-```bash
-python scripts/30_tune_factors.py --trials 60 --workers 6
-python scripts/31_tune_factors_by_process.py --trials 300 --processes 3
-```
-
-* In-sample: 2016-01-04 .. 2021-12-31. Out-of-sample: 2022-01-04 .. 2025-12-31.
-* Objective: training-period net Sharpe subject to
-  `observations >= 10000`, `max_drawdown >= -40%`, `mean_turnover <= 0.5`.
-* `signal_scale` is **pinned to the baseline** by default; `--tune-scale` (or
-  dropping `--no-scale-tune` on the multi-process runner) searches it again
-  inside the historical range and writes to a separate directory.
-* TPE sampler, `seed=42`, `multivariate=True`, `group=True`,
-  `n_startup_trials=10`; the baseline parameter set is always evaluated first.
-
-Each factor directory holds `trials.csv`, `best_params.json` and
-`best_factor.parquet`; the study writes `summary.csv` and `manifest.json`.
-The multi-process runner additionally supports resuming from `study.sqlite3`
-with `--resume`.
-
-## Stage 2 - correlation report
-
-`40_correlation_report.py` rebuilds every sleeve once at its tuned parameters
-and writes daily net returns, then three matrices into
-`results/tuning/factor_correlation_4f/`:
-
-* `corr_returns_10y.csv`, `corr_returns_10y_spearman.csv`
-* `corr_returns_2025.csv`
-* `corr_signals_10y.csv` (cross-sectional rank correlation of signals)
-* `correlation_matrices.png`
-
-## Stage 3 - portfolio backtest
-
-```bash
-python scripts/50_backtest_portfolio.py                       # unlevered, 2016-2025
-python scripts/50_backtest_portfolio.py --vol-target 0.2 --run-name equal_weight_4f
-python scripts/50_backtest_portfolio.py --specs-file my_specs.json   # several books at once
-```
-
-Capital is split equally across sleeves (`--weights` overrides), each sleeve
-pays its own turnover cost, and the book return is the weighted sum of sleeve
-returns. Outputs per run: `config.json`, `overall.csv`, `by_year.csv`,
-`by_instrument.csv`, `daily_net_return.csv`. The run directory also gets
-`final_summary.csv`, `combo_comparison.csv`, `cost_report.csv`,
-`sleeve_daily_net_return.csv` and `comparison_equity.png`.
-
-`--vol-target` adds a second run named `<run-name>_vol<NN>` that scales the book
-by `target / trailing 60-day realised volatility` (shifted one day, capped at
-`--vol-max-leverage`, default 10x) and writes `leverage.csv`.
-
-`cost_report.csv` reports, per scope (window and each calendar year):
-gross and net return, total and annualised cost, cost share of gross, cost over
-volatility, turnover, and the implied basis points per unit turnover.
-
-## Stage 4 - chart
-
-`60_render_run_chart.py --results-dir results/final_4f --start 2026-01-01 --end 2026-09-04`
-re-renders `comparison_equity.png` from saved CSVs without re-running the
-backtest.
-
-## Stage 5 - rebuilding inputs from a local bundle
-
-`20_rebuild_inputs_from_bundle.py` reproduces the six tables from an RQAlpha
-bundle, keeping the cached 2016-2025 history byte-identical and reconstructing
-the extension with the `prev_close_ratio` chaining convention. It validates
-itself against the cache (snapshots and continuous returns) and prints both
-checks. See [DATA.md](DATA.md).
-
-## Reproducibility notes
-
-* Backtests are deterministic: the same inputs and parameters reproduce Sharpe
-  to 1e-15, and the tuned baseline trial reproduces the legacy
-  `results/qualified` numbers exactly.
-* `seed=42` makes TPE trajectories comparable across runs; a 300-trial study
-  starts with the same 60 trials as a 60-trial study.
-* The pipeline is multiprocessing-based on Windows; each worker loads the
-  parquet inputs once (about 0.7 GB) before building factors.
-
-## 阶段 70：原生账户结果层
-
-`scripts/70_native_backtest.py` 把四个 sleeve 的信号重放进 RQAlpha 原生期货账户
-（整数手、50% 保证金预算、25% 成交量上限、1 跳滑点、逐笔手续费），并对 20% 波动目标
-做一次原生层校准。口径与复现见 [NATIVE_ACCOUNT_SPEC.md](NATIVE_ACCOUNT_SPEC.md)。
-
-```bash
-python scripts/70_native_backtest.py --start 2016-01-04 --end 2026-10-30
-```
-
-### 追加挖掘因子（exported sleeves）
-
-`70_native_backtest.py` 也能把外部挖掘因子当作额外 sleeve 一起重放，因子清单写在
-`china_cta/factors/exported.py`（名称、导出目录、冻结方向/尺度、表达式）。三个已登记：
-
-| sleeve 名 | 来源 | 表达式 | 方向 |
-|---|---|---|---|
-| `crowded_trend_reversal_60d` | 原8号 / `mined_4a51bf38703a` | `-corr_60(mean_60(return_60), channel_position_20 × volatility_20)` | +1 |
-| `volume_oi_coflow_10d` | 原2号 / `mined_7dffc88fcdec` | `corr_10(volume_change, oi_surprise_20)` | +1 |
-| `volume_burst_vol_reversal_60d` | 本轮1号 / `mined_8eb423cac50b` | `-mean_60(corr_20(Δ20 volume_surprise_20, mean_60(volatility_ratio)))` | −1 |
-
-```bash
-python scripts/70_native_backtest.py \
-  --factors historical_skewness_252d,fixed_maturity_carry_90_180d,xsmom_252_21,oi_participation_trend_60d \
-  --extra-package <导出包目录> --extra-factors all \
-  --book-factors crowded_trend_reversal_60d,volume_oi_coflow_10d,volume_burst_vol_reversal_60d \
-  --start 2016-01-04 --end 2026-09-04 --out-dir results/final_7f_native_vol20
-```
-
-* `--extra-package`：导出包目录（含 `<folder>/signals.parquet` 与 `definition.json`）。
-* `--extra-factors`：`all`、`none` 或逗号分隔的 sleeve 名。
-* `--book-factors`：哪些 sleeve 需要单独回放成单因子账户，`all`/`none`/列表；组合账户总会跑。
-
-导出信号已经是 `clip(raw × direction ÷ scale, −1, 1)`、按信息日 T 记录，因此不再做方向或尺度变换；
-进入组合前会与项目 `universe` 做同样的 PIT 连接，品种范围因此保持在项目可定价的 30 个品种上
-（导出包本身覆盖 35 个，多的 BU/C/FU/HC/RM 会被剔除并打印）。
-
-产出目录 `results/final_4f_native_vol20/`：`daily_equity.csv`、`daily_equity_pass1.csv`、
-`trades.csv`（逐笔成交与手续费，含 `night_session` 与 `execution_time` 两列）、`target_positions.csv`、`daily_risk.csv`、
-`vol_calibration.csv`、`segments.csv`、`segments_by_book.csv`、`by_year.csv`、
-`by_year_by_book.csv`、`by_instrument.csv`、`by_instrument_by_book.csv`、
-`attribution_reconciliation.csv`、`equity_comparison.png`。
-
-最近一次全区间结果（2016-01-04..2026-09-04，2593 个交易日）：
-
-| 口径 | 夏普 | 年化 | 波动 | 最大回撤 |
-| --- | --- | --- | --- | --- |
-| 研究层（阶段 3，1bp 换手成本） | 1.58 | 19.2% | 19.2% | -22.9% |
-| 原生账户 pass 1（研究杠杆原样） | 1.35 | 26.3% | 18.6% | -25.7% |
-| 原生账户 pass 2（校准 x1.08） | 1.35 | 28.4% | 20.0% | -27.5% |
-
-口径提醒：原生账户按合约级行情回放，止于本地 bundle 的最后交易日（2026-09-04）。
-保证金预算按**当日账户权益**的 50% 计算（`margin_basis="live_equity"`），实际占用
-26%–37%、上限从未被触及，实现波动 20.0%，与目标一致。
-
-### 多包混装（2026-11）
-
-`--extra-package` 可以重复：每个 sleeve 由 `china_cta.factors.exported.locate()` 分配到真正
-包含它的导出目录，因此“一轮三因子”和“二轮四因子”可以同时进场。`40_correlation_report.py`
-用同样的参数做混合组合的相关性分析。详见 `docs/EXPORTED_SLEEVES.md`。
-
-## Final book: nine sleeves
-
-The live book is nine equally weighted sleeves: the four package factors above plus the five
-qualified exported sleeves (`--extra-factors qualified`). Two further exported sleeves are
-retired and excluded from the book. On the native account (2016-01-04..2026-09-04) it prints
-Sharpe 1.7018 / annualised 37.79% / volatility 20.02% / max drawdown -20.18%, with
-train 1.722, validation 1.387 and test 2.112. See `docs/FACTOR_CLASSIFICATION.md` and
-`docs/EXPORTED_SLEEVES.md`.
+1. `pytest tests` 全绿（离线可跑，缺可选依赖时会 skip）
+2. `70` 的 `attribution_reconciliation.csv` 残差应接近 0（当前实现约 1e-5 元量级）
+3. `daily_risk.csv` 的 `margin_over_equity` 中位数应在 20%~30%，且不应长期顶在 50%
+4. 同一输入、同一参数重复运行，`daily_equity.csv` 应逐位一致

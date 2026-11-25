@@ -2,12 +2,6 @@
 .venv/
 .conda/
 .conda-env/
-.conda-pkgs/
-/runtime_d/
-/tmp/
-/build/
-/dist/
-*.egg-info/
 env/
 conda-meta/
 __pycache__/
@@ -24,6 +18,7 @@ __pycache__/
 /output/
 /migration_backups/
 *.parquet
+!china_cta/factors/qualified/*/signals.parquet
 *.feather
 *.arrow
 *.h5
@@ -58,3 +53,7 @@ secrets*.yml
 # pytest scratch directories kept by --basetemp
 .pytest_tmp/
 .pytest_tmp_*/
+
+# editor / patch backups
+*.bak
+config/local.json

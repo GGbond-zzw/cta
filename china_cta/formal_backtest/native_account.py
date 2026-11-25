@@ -165,6 +165,140 @@ def next_trading_day(dates: Iterable[object], calendar: np.ndarray) -> dict[pd.T
     return mapping
 
 
+def product_close_returns(
+    market: Mapping[str, pd.DataFrame],
+    dominant: pd.DataFrame,
+    prices: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Daily close-to-close returns per product.
+
+    ``prices`` should be the ratio-adjusted continuous series used by the
+    research layer; without it the raw dominant contract closes are used, which
+    carry a spurious jump every time the dominant contract rolls.
+    """
+
+    if prices is not None and len(prices):
+        frame = prices.loc[:, ["trading_date", "underlying_symbol", "close"]].copy()
+        frame["trading_date"] = pd.to_datetime(frame["trading_date"])
+        pivot = (
+            frame.pivot_table(
+                index="trading_date",
+                columns="underlying_symbol",
+                values="close",
+                aggfunc="last",
+            )
+            .sort_index()
+        )
+        pivot = pivot.where(pivot.gt(0))
+        returns = pivot.pct_change(fill_method=None)
+        return returns.mask(~np.isfinite(returns))
+
+    bars = market["bars"]
+    close = bars.loc[:, ["trading_date", "order_book_id", "close"]].copy()
+    close["trading_date"] = pd.to_datetime(close["trading_date"])
+    close = (
+        close.drop_duplicates(["trading_date", "order_book_id"])
+        .set_index(["trading_date", "order_book_id"])["close"]
+    )
+    frame = dominant.loc[:, ["trading_date", "product", "dominant_order_book_id"]].copy()
+    frame["trading_date"] = pd.to_datetime(frame["trading_date"])
+    index = pd.MultiIndex.from_arrays(
+        [frame["trading_date"], frame["dominant_order_book_id"].astype(str)]
+    )
+    frame["close"] = close.reindex(index).to_numpy()
+    pivot = (
+        frame.pivot_table(
+            index="trading_date", columns="product", values="close", aggfunc="last"
+        )
+        .sort_index()
+    )
+    pivot = pivot.where(pivot.gt(0))
+    returns = pivot.pct_change(fill_method=None)
+    return returns.mask(~np.isfinite(returns))
+
+
+def ex_ante_leverage(
+    unit_exposures: pd.DataFrame,
+    market: Mapping[str, pd.DataFrame],
+    dominant: pd.DataFrame,
+    *,
+    target: float,
+    window: int = 60,
+    cap: float = 10.0,
+    min_periods: int = 40,
+    prices: pd.DataFrame | None = None,
+    smoothing: int = 15,
+) -> pd.Series:
+    """Leverage that puts the *predicted* book volatility at ``target``.
+
+    The prediction uses only the return history available before the session the
+    orders execute in, so it is free of look-ahead.  The covariance matrix is
+    shrunk towards a constant-correlation form: ``cov = D (rho + (1 - rho) I) D``
+    with ``D = diag(sigma)`` and ``rho`` the mean pairwise correlation.
+    """
+
+    empty = pd.Series(dtype=float)
+    if unit_exposures is None or len(unit_exposures) == 0:
+        return empty
+    returns = product_close_returns(market, dominant, prices)
+    if returns.empty:
+        return empty
+    weights = (
+        unit_exposures.groupby(["trading_date", "product"], observed=True)[
+            "capital_units"
+        ]
+        .sum()
+        .unstack("product")
+        .sort_index()
+    )
+    values: dict[pd.Timestamp, float] = {}
+    for date, row in weights.iterrows():
+        stamp = pd.Timestamp(date)
+        history = returns.loc[returns.index < stamp].tail(window)
+        book = row.dropna().astype(float)
+        book = book[book.ne(0.0)]
+        if len(history) < min_periods or book.empty:
+            values[stamp] = 1.0
+            continue
+        assets = [str(column) for column in book.index if column in history.columns]
+        if not assets:
+            values[stamp] = 1.0
+            continue
+        sample = history.loc[:, assets].dropna(axis=1, how="any")
+        if sample.shape[1] == 0 or len(sample) < min_periods:
+            values[stamp] = 1.0
+            continue
+        sigma = sample.std(ddof=1).to_numpy(dtype=float)
+        matrix = sample.corr().to_numpy(dtype=float)
+        size = matrix.shape[0]
+        if size > 1:
+            off_diagonal = matrix[~np.eye(size, dtype=bool)]
+            rho = float(np.nanmean(off_diagonal))
+        else:
+            rho = 0.0
+        if not math.isfinite(rho):
+            rho = 0.0
+        rho = min(max(rho, -0.5), 0.95)
+        covariance = np.outer(sigma, sigma) * (rho + (1.0 - rho) * np.eye(size))
+        vector = book.reindex(list(sample.columns)).fillna(0.0).to_numpy(dtype=float)
+        variance = float(vector @ covariance @ vector)
+        if not math.isfinite(variance) or variance <= 0.0:
+            values[stamp] = 1.0
+            continue
+        predicted = math.sqrt(variance) * math.sqrt(252.0)
+        if not math.isfinite(predicted) or predicted <= 1e-12:
+            values[stamp] = cap
+            continue
+        values[stamp] = float(min(max(target / predicted, 0.0), cap))
+    series = pd.Series(values, dtype=float).sort_index()
+    if smoothing and smoothing > 1:
+        # Inverting a small predicted variance is numerically fragile: smooth the
+        # ratio so a noisy 60-session covariance window cannot swing the book.
+        series = series.ewm(span=smoothing, adjust=False).mean()
+        series = series.clip(upper=cap)
+    return series
+
+
 def build_target_quantities(
     exposure: pd.DataFrame,
     dominant: pd.DataFrame,

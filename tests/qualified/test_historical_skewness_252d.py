@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from china_cta.factors.schema import FACTOR_COLUMNS
-from china_cta.factors.qualified.historical_skewness import (
+from china_cta.factors.qualified.historical_skewness_252d import (
     calculate_historical_skewness,
     compute_historical_skewness_factor,
 )

@@ -228,3 +228,47 @@ bar 的 `open` 就是该时段的第一个成交价。因此
 
 成交价仍然是"该 bar 的首个成交价 + 1 跳滑点"，与 `docs/NATIVE_ACCOUNT_SPEC.md` 第 3 节一致；
 本次改动只增加标注，不改变任何价格、手数、成本或收益数字。
+
+## 13. Alternative sizing: ex-ante position risk (`--sizing exante`)
+
+The quoted book sizes in two stages: the research overlay sets leverage from the
+combo's trailing 60-session volatility, then one constant *structural factor*
+(`target / realised`) closes the gap between signal risk and account risk.
+`--sizing exante` replaces both with a single pass that inverts the model:
+
+```
+w_p        = per-product capital exposure (signal x sleeve weight)
+Sigma      = 60-session covariance of the ratio-adjusted continuous prices
+sigma_pred = sqrt(w' Sigma w) * sqrt(252)
+leverage   = vol_target / sigma_pred        (smoothed, capped)
+```
+
+It uses no account P&L, so there is no feedback loop and no look-ahead. On this
+book it is, however, **numerically fragile and biased low**, for two reasons:
+
+1. the book is close to market-neutral, so `sigma_pred` is small (about 1.1% a
+   year at unit leverage); inverting it swings the leverage between 1x and the
+   cap, and the swings themselves add volatility;
+2. the gap between what the model predicts and what the account realises is
+   **not** a return-definition artefact. Measured on the same book, the variance of
+   the segmented P&L (`q(t-1)` overnight plus `q(t)` intraday) is 0.997x the variance
+   of a plain close-to-close series, roll days are no worse than normal days (27.3%
+   vs 26.4%), and executed lots match planned lots to 1.0000. The 1.33x therefore
+   sits in the covariance/leverage construction itself: inverting a 60-session sigma
+   estimate whose forward/trailing ratio has a median of 1.06 but a p25-p75 range of
+   0.82-1.28 amplifies estimation noise into leverage.
+
+Measured on the ten-sleeve book (2016-01-04..2026-09-04):
+
+| sizing | Sharpe | annualised | volatility | MDD | median leverage | gross/equity |
+|---|---:|---:|---:|---:|---:|---:|
+| two-stage, slow causal 250-session, cap 2.0 (**quoted**) | 1.780 | 40.6% | 20.31% | -26.6% | 1.40 (k) | 2.46 |
+| two-stage, one-shot x1.3101 (ex post, not executable) | 1.803 | 40.6% | 20.02% | -21.3% | 11.5 | 2.28 |
+| two-stage, rolling 60-session | 1.784 | 43.3% | 21.48% | -27.4% | - | - |
+| ex-ante, 60-session covariance, EWMA 15 | 1.747 | 53.9% | 26.72% | -31.9% | 17.8 | 3.32 |
+
+Scaling the ex-ante ratio by 0.75 would land near 20% volatility at roughly the
+same Sharpe, i.e. still behind the two-stage design.  Keep `--sizing calibrate`
+as the standard and treat `exante` as an experiment: it only makes sense after
+the covariance model is replaced by one that matches the account's marking
+convention (open-to-close plus close-to-close).

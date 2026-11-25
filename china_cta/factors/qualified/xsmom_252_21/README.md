@@ -1,5 +1,9 @@
 # xsmom_252_21
 
-入口：`china_cta.factors.qualified.xsmom_252_21.build(inputs)`。
+入口：`china_cta.factors.qualified.xsmom_252_21.build(inputs)`，返回标准五列因子表
+（`trading_date/instrument/factor_name/raw_factor/signal`）。
 
-标准五列输出；信号为当日信息时点，最早下一交易日开盘执行。计算实现见factor.py；冻结模型和参数随目录提交。四个原手写因子保留函数默认值，历史调参结果须显式传入原回测配置，不能把默认值误认为历史最优参数。
+- 信号时点：`trading_date` 收盘后可得，最早在下一交易日开盘执行（项目统一口径）。
+- 参数来源：本地 300 次贝叶斯调优结果（`results/tuning/qualified4_300/xsmom_252_21/best_params.json`）
+- 参数取值：见 `parameters.json`。
+- 说明：实现沿用项目原有模块，只换了目录结构。
